@@ -46,7 +46,7 @@ end
 --   "off"  = server belum punya rute /hb (pengecekan belum dipasang): script jalan seperti biasa
 -- Tidak ada rahasia di sini. Menu Admin hanya muncul untuk key yang ditandai admin di server,
 -- dan tiap aksi admin tetap dicek server memakai ADMIN_KEY yang diketik sendiri.
-Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.6", Admin = false, Fails = 0, Off = false }
+Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.7", Admin = false, Fails = 0, Off = true } -- v2.7: tanpa key, langsung jalan (pengecekan server mati)
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -11088,7 +11088,11 @@ Guard.MaxHours = math.clamp(tonumber(Guard.MaxHours) or 6, 1, 24)
 -- ===== TAB: ADMIN (hanya dibuat untuk key yang ditandai admin di server) =====
 do (function()
     local Lic = Session.Lic
-    if not Lic.Admin then return end
+    -- v2.7: tanpa key, menu Admin hanya muncul kalau file SkyP_Admin.txt ada (aksi admin tetap dicek server)
+    if not Lic.Admin then
+        local okA, hasA = pcall(function() return isfile and isfile("SkyP_Admin.txt") end)
+        if not (okA and hasA) then return end
+    end
     local ATab = makeTab("Admin", "shield", "setel")
     local canFile = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
     if canFile then
