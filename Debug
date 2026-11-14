@@ -1,0 +1,467 @@
+-- =====================================================================
+-- SkyP DEBUG (berdiri sendiri)
+-- Dipakai kalau SkyP TIDAK BISA di-execute sama sekali, jadi tab Observasi tidak bisa dibuka.
+-- Execute file ini SENDIRI (tanpa SkyP), di dalam world. Yang dikerjakan:
+--   1. cek executor & fungsi yang dibutuhkan SkyP
+--   2. cek objek game yang dicari SkyP saat mulai
+--   3. cari ulang semua referensi game dari memori, dibandingkan dengan sidik jari terakhir
+--      yang tersimpan (kalau belum ada: ciri bawaan SkyP)
+--   4. uji file SkyP: bisa dikompilasi atau tidak, dan error apa saat dijalankan (dengan nomor baris)
+-- Laporan: muncul di console (F9), disalin ke clipboard, dan disimpan ke file LAPORAN di bawah.
+-- =====================================================================
+local SCRIPT_FILE = "SkyP.lua"  -- nama file SkyP di folder workspace executor ("" = lewati uji file)
+local RUN_SCRIPT = true         -- true = setelah lolos kompilasi, SkyP ikut dijalankan untuk menangkap error-nya
+local FOLDER = "Alfian"         -- folder config SkyP
+local LAPORAN = FOLDER .. "/debug_laporan.txt"
+
+local L = {}
+local function add(x)
+    L[#L + 1] = tostring(x)
+    print("[SkyP Debug] " .. tostring(x))
+end
+local function yn(v)
+    return v and "ada" or "TIDAK ADA"
+end
+local getconsts = (debug and debug.getconstants) or getconstants
+local Http = game:GetService("HttpService")
+
+local function isGameFn(fn)
+    if isexecutorclosure then
+        local ok, res = pcall(isexecutorclosure, fn)
+        if ok and res then
+            return false
+        end
+    end
+    if islclosure then
+        local ok, res = pcall(islclosure, fn)
+        if ok and not res then
+            return false
+        end
+    end
+    local ok, src = pcall(debug.info, fn, "s")
+    if ok and type(src) == "string" and (string.find(src, "CoreGui", 1, true) or string.find(src, "CorePackages", 1, true)) then
+        return false
+    end
+    return true
+end
+
+local function childNames(inst, max)
+    local out = {}
+    pcall(function()
+        for i, c in ipairs(inst:GetChildren()) do
+            if i > max then
+                out[#out + 1] = "...+" .. (#inst:GetChildren() - max)
+                break
+            end
+            out[#out + 1] = c.Name .. "(" .. c.ClassName .. ")"
+        end
+    end)
+    return #out > 0 and table.concat(out, ", ") or "-"
+end
+
+local function flush(done)
+    local text = table.concat(L, "\n")
+    pcall(function()
+        if type(makefolder) == "function" and type(isfolder) == "function" and not isfolder(FOLDER) then
+            makefolder(FOLDER)
+        end
+        writefile(LAPORAN, text)
+    end)
+    if done then
+        local clip = setclipboard or toclipboard
+        if clip then
+            pcall(clip, text)
+        end
+        pcall(function()
+            game:GetService("StarterGui"):SetCore("SendNotification", {
+                Title = "SkyP Debug",
+                Text = "Selesai. Laporan disalin ke clipboard dan disimpan di " .. LAPORAN,
+                Duration = 10,
+            })
+        end)
+    end
+end
+
+local Dbg = {}
+Dbg.Builtin = {
+    World = { kind = "table", keys = { "fg", "bg", "w", "h", "spawn" } },
+    Inv = { kind = "table", keys = { "slots", "capacity" } },
+    Menu = { kind = "table", keys = { "openBackpack", "ui" } },
+    Gems = { kind = "table", keys = { "addGems" } },
+    Hud = { kind = "table", keys = { "punchRange", "handPower" } },
+    Others = { kind = "table", keys = { "list", "where", "playerAt" } },
+    StateVal = { kind = "table", keys = { "x", "y", "facing", "vx" } },
+    SetTile = { kind = "function", consts = { "tile", "placedAt", "flips" } },
+    Punch = { kind = "function", consts = { "Empty the Vending Machine first!", "newCrack" } },
+    Arm = { kind = "function", consts = { "forearm", "heldReach", "punchReach" } },
+}
+
+function Dbg.nameOf(k)
+    return string.match(k, "^(.*):%a+$") or k
+end
+
+function Dbg.keys(t)
+    local keys, nNum, sample = {}, 0, nil
+    pcall(function()
+        local n = 0
+        for k, v in next, t do
+            n = n + 1
+            if n > 5000 then
+                break
+            end
+            if type(k) == "string" then
+                if #keys < 150 then
+                    keys[#keys + 1] = k .. ":" .. type(v)
+                end
+            else
+                nNum = nNum + 1
+                if sample == nil and type(v) == "table" then
+                    sample = v
+                end
+            end
+        end
+    end)
+    table.sort(keys)
+    return keys, nNum, sample
+end
+
+function Dbg.fn(fn)
+    local e = { kind = "function", consts = {} }
+    pcall(function() e.src = tostring(debug.info(fn, "s")) end)
+    pcall(function() e.line = debug.info(fn, "l") end)
+    pcall(function() e.np = debug.info(fn, "a") end)
+    if getconsts then
+        pcall(function()
+            local seen = {}
+            for _, c in pairs(getconsts(fn)) do
+                if type(c) == "string" and #c > 0 and #c <= 60 and not seen[c] then
+                    seen[c] = true
+                    e.consts[#e.consts + 1] = c
+                end
+            end
+        end)
+    end
+    table.sort(e.consts)
+    while #e.consts > 100 do
+        table.remove(e.consts)
+    end
+    return e
+end
+
+function Dbg.entry(v)
+    if type(v) == "function" then
+        return Dbg.fn(v)
+    elseif type(v) == "table" then
+        local keys, nNum, sample = Dbg.keys(v)
+        local e = { kind = "table", keys = keys, num = nNum }
+        if sample then
+            e.sample = Dbg.keys(sample)
+        end
+        return e
+    end
+    return nil
+end
+
+function Dbg.diff(old, new)
+    local so, sn = {}, {}
+    for _, k in ipairs(old or {}) do
+        so[Dbg.nameOf(k)] = k
+    end
+    for _, k in ipairs(new or {}) do
+        sn[Dbg.nameOf(k)] = k
+    end
+    local gone, added, typ = {}, {}, {}
+    for n, k in pairs(so) do
+        local k2 = sn[n]
+        if k2 == nil then
+            gone[#gone + 1] = n
+        elseif k2 ~= k and k ~= n and k2 ~= n then
+            typ[#typ + 1] = k .. " -> " .. string.sub(k2, #n + 2)
+        end
+    end
+    for n in pairs(sn) do
+        if so[n] == nil then
+            added[#added + 1] = n
+        end
+    end
+    table.sort(gone)
+    table.sort(added)
+    table.sort(typ)
+    return gone, added, typ
+end
+
+function Dbg.join(list, max)
+    local out = {}
+    for i, k in ipairs(list) do
+        if i > max then
+            out[#out + 1] = "...+" .. (#list - max)
+            break
+        end
+        out[#out + 1] = tostring(k)
+    end
+    return #out > 0 and table.concat(out, ", ") or "-"
+end
+
+function Dbg.candidates(missing)
+    local out = {}
+    local tabs, fns = {}, {}
+    for name, b in pairs(missing) do
+        out[name] = {}
+        if b.kind == "table" and #(b.keys or {}) > 0 then
+            local names = {}
+            for _, k in ipairs(b.keys) do
+                names[#names + 1] = Dbg.nameOf(k)
+            end
+            tabs[#tabs + 1] = { name = name, names = names, need = math.min(#names, math.max(2, math.ceil(#names * 0.4))) }
+        elseif b.kind == "function" and #(b.consts or {}) > 0 then
+            local set = {}
+            for _, c in ipairs(b.consts) do
+                set[c] = true
+            end
+            fns[#fns + 1] = { name = name, set = set, total = #b.consts,
+                need = math.min(#b.consts, math.max(1, math.ceil(#b.consts * 0.34))) }
+        end
+    end
+    if not getgc then
+        return out, "getgc tidak ada di executor ini: kandidat tidak bisa dicari"
+    end
+    local okG, gc = pcall(getgc, true)
+    if not okG or type(gc) ~= "table" then
+        return out, "getgc(true) gagal: " .. tostring(gc)
+    end
+    local function push(list, c)
+        if #list >= 3 and c.score <= list[#list].score then
+            return
+        end
+        list[#list + 1] = c
+        table.sort(list, function(a, b)
+            return a.score > b.score
+        end)
+        while #list > 3 do
+            table.remove(list)
+        end
+    end
+    for i, v in ipairs(gc) do
+        if i % 2000 == 0 then
+            task.wait()
+        end
+        local tv = type(v)
+        if tv == "table" and #tabs > 0 then
+            for _, q in ipairs(tabs) do
+                local hit = 0
+                pcall(function()
+                    for j, k in ipairs(q.names) do
+                        if rawget(v, k) ~= nil then
+                            hit = hit + 1
+                        end
+                        if j == 8 and hit == 0 then
+                            break -- 8 kunci pertama tidak ada satu pun: bukan objek ini
+                        end
+                    end
+                end)
+                if hit >= q.need then
+                    push(out[q.name], { score = hit / #q.names, hit = hit, total = #q.names, v = v })
+                end
+            end
+        elseif tv == "function" and #fns > 0 and getconsts and isGameFn(v) then
+            local okc, consts = pcall(getconsts, v)
+            if okc and type(consts) == "table" then
+                for _, q in ipairs(fns) do
+                    local hit, seen = 0, {}
+                    for _, c in pairs(consts) do
+                        if type(c) == "string" and q.set[c] and not seen[c] then
+                            seen[c] = true
+                            hit = hit + 1
+                        end
+                    end
+                    if hit >= q.need then
+                        push(out[q.name], { score = hit / q.total, hit = hit, total = q.total, v = v })
+                    end
+                end
+            end
+        end
+    end
+    return out
+end
+
+---------------------------------------------------------------------
+-- 1) EXECUTOR
+---------------------------------------------------------------------
+add("== SkyP Debug ==")
+do
+    local name = "?"
+    if identifyexecutor then
+        local ok, n, v = pcall(identifyexecutor)
+        if ok then
+            name = tostring(n) .. (v and (" " .. tostring(v)) or "")
+        end
+    end
+    add("Executor : " .. name)
+    add("-- Fungsi wajib --")
+    local wajib = {
+        { "getgc", getgc }, { "getconstants", getconsts }, { "debug.info", debug and debug.info },
+    }
+    local kurang = 0
+    for _, f in ipairs(wajib) do
+        if not f[2] then
+            kurang = kurang + 1
+        end
+        add(("  %-18s: %s"):format(f[1], yn(f[2])))
+    end
+    add("-- Fungsi tambahan --")
+    for _, f in ipairs({
+        { "islclosure", islclosure }, { "isexecutorclosure", isexecutorclosure }, { "getconnections", getconnections },
+        { "request", (syn and syn.request) or (http and http.request) or http_request or request },
+        { "loadstring", loadstring },
+        { "readfile/writefile", readfile and writefile and isfile }, { "queue_on_teleport", queue_on_teleport or queueonteleport },
+        { "setclipboard", setclipboard or toclipboard }, { "getcustomasset", getcustomasset }, { "gethui", gethui },
+        { "getupvalue", (debug and debug.getupvalue) or getupvalue }, { "setupvalue", (debug and debug.setupvalue) or setupvalue },
+    }) do
+        add(("  %-18s: %s"):format(f[1], yn(f[2])))
+    end
+    if kurang > 0 then
+        add("KESIMPULAN: executor ini kekurangan " .. kurang .. " fungsi wajib. SkyP tidak bisa terhubung ke game di sini")
+    end
+end
+
+---------------------------------------------------------------------
+-- 2) OBJEK GAME YANG DICARI SAAT MULAI
+---------------------------------------------------------------------
+add("")
+add("-- Game --")
+pcall(function()
+    add(("PlaceId %s | versi game %s"):format(tostring(game.PlaceId), tostring(game.PlaceVersion)))
+end)
+do
+    local RS = game:GetService("ReplicatedStorage")
+    local LP = game:GetService("Players").LocalPlayer
+    local PG = LP and LP:FindFirstChild("PlayerGui")
+    local WR = RS:FindFirstChild("WorldRemotes")
+    add("ReplicatedStorage.WorldRemotes : " .. (WR and (#WR:GetChildren() .. " remote") or "TIDAK ADA (nama folder remote berubah)"))
+    add("ReplicatedStorage.Shared       : " .. yn(RS:FindFirstChild("Shared")) .. " (boleh tidak ada di game baru)")
+    add("PlayerGui.GameGui              : " .. yn(PG and PG:FindFirstChild("GameGui")))
+    if not WR then
+        add("  isi ReplicatedStorage: " .. childNames(RS, 30))
+    end
+    if PG and not PG:FindFirstChild("GameGui") then
+        add("  isi PlayerGui: " .. childNames(PG, 30))
+    end
+end
+
+---------------------------------------------------------------------
+-- 3) REFERENSI GAME: dicari ulang dari memori
+---------------------------------------------------------------------
+add("")
+add("-- Referensi game --")
+do
+    local base
+    pcall(function()
+        local path = FOLDER .. "/debug_sidikjari.json"
+        if isfile(path) then
+            base = Http:JSONDecode(readfile(path))
+        end
+    end)
+    if type(base) == "table" and type(base.refs) == "table" then
+        add(("Pembanding: sidik jari tersimpan (versi game %s, %s)"):format(tostring(base.ver or "?"), os.date("%d/%m %H:%M", base.at or 0)))
+    else
+        base = { refs = Dbg.Builtin }
+        add("Pembanding: ciri bawaan SkyP (belum ada sidik jari tersimpan)")
+    end
+    local want, order, skipped = {}, {}, {}
+    for name, b in pairs(base.refs) do
+        if type(b) == "table" and ((b.kind == "table" and #(b.keys or {}) > 0) or (b.kind == "function" and #(b.consts or {}) > 0)) then
+            want[name] = b
+            order[#order + 1] = name
+        else
+            skipped[#skipped + 1] = name
+        end
+    end
+    table.sort(order)
+    table.sort(skipped)
+    local cand, err = Dbg.candidates(want)
+    if err then
+        add("  " .. err)
+    else
+        local nOk, nChg, nGone = 0, 0, 0
+        local at = #L + 1
+        for _, name in ipairs(order) do
+            local b, c = want[name], (cand[name] or {})[1]
+            if not c then
+                nGone = nGone + 1
+                add("[HILANG]  " .. name .. ": tidak ada objek game yang mirip ciri lama")
+                add("    ciri lama: " .. Dbg.join(b.kind == "table" and b.keys or b.consts, 25))
+            elseif c.hit >= c.total then
+                nOk = nOk + 1
+                add("[ADA]     " .. name .. ": ciri lama masih lengkap")
+            else
+                nChg = nChg + 1
+                local e = Dbg.entry(c.v) or {}
+                local now = b.kind == "table" and e.keys or e.consts
+                local gone = Dbg.diff(b.kind == "table" and b.keys or b.consts, now)
+                add(("[BERUBAH] %s: paling mirip cocok %d dari %d"):format(name, c.hit, c.total))
+                add("    ciri lama yang hilang: " .. Dbg.join(gone, 20))
+                add("    yang ada sekarang    : " .. Dbg.join(now or {}, 40))
+                if b.kind == "function" then
+                    add(("    fungsi di baris %s, %s parameter"):format(tostring(e.line), tostring(e.np)))
+                end
+            end
+        end
+        table.insert(L, at, ("Hasil: %d masih ada, %d berubah, %d hilang"):format(nOk, nChg, nGone))
+        if #skipped > 0 then
+            add("Tidak dicek dari sini (hanya bisa dicek dari dalam SkyP): " .. table.concat(skipped, ", "))
+        end
+    end
+end
+flush(false)
+
+---------------------------------------------------------------------
+-- 4) UJI FILE SKYP
+---------------------------------------------------------------------
+add("")
+add("-- Uji file SkyP --")
+do
+    local src
+    if SCRIPT_FILE == "" then
+        add("dilewati (SCRIPT_FILE kosong)")
+    elseif not (readfile and isfile) then
+        add("dilewati: executor tidak bisa membaca file")
+    elseif not isfile(SCRIPT_FILE) then
+        add("file '" .. SCRIPT_FILE .. "' tidak ada di folder workspace executor. Taruh file SkyP di sana, atau ganti SCRIPT_FILE di baris atas")
+    else
+        local ok, res = pcall(readfile, SCRIPT_FILE)
+        if ok and type(res) == "string" then
+            src = res
+        else
+            add("gagal membaca file: " .. tostring(res))
+        end
+    end
+    if src then
+        add(("ukuran file: %d karakter"):format(#src))
+        if not loadstring then
+            add("executor tidak punya loadstring: uji kompilasi tidak bisa")
+        else
+            local fn, cerr = loadstring(src, "=SkyP")
+            if not fn then
+                add("KOMPILASI GAGAL (script tidak akan jalan sama sekali). Pesan:")
+                add("  " .. tostring(cerr))
+                add("  angka di antara tanda ':' adalah nomor baris yang salah")
+            else
+                add("kompilasi: OK")
+                if RUN_SCRIPT then
+                    flush(false) -- simpan dulu, jaga-jaga kalau SkyP membuat macet
+                    add("menjalankan SkyP untuk menangkap error...")
+                    local ok, rerr = xpcall(fn, function(e)
+                        return debug.traceback(tostring(e), 2)
+                    end)
+                    if ok then
+                        add("SkyP mulai tanpa error di bagian awal. Kalau menunya tetap tidak muncul, cek pesan merah di console (F9)")
+                    else
+                        add("ERROR SAAT DIJALANKAN:")
+                        add("  " .. tostring(rerr))
+                    end
+                end
+            end
+        end
+    end
+end
+flush(true)
