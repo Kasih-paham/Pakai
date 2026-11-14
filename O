@@ -46,20 +46,18 @@ end
 --   "off"  = server belum punya rute /hb (pengecekan belum dipasang): script jalan seperti biasa
 -- Tidak ada rahasia di sini. Menu Admin hanya muncul untuk key yang ditandai admin di server,
 -- dan tiap aksi admin tetap dicek server memakai ADMIN_KEY yang diketik sendiri.
-Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.7", Admin = false, Fails = 0, Off = true } -- v2.7: tanpa key, langsung jalan (pengecekan server mati)
+Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.3", Admin = false, Fails = 0, Off = true }
+-- v2.3: TANPA KEY. Off = true: tidak baca SkyP_Key.txt, tidak cek ke server (/hb, /trial), script langsung jalan.
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
     local req = (syn and syn.request) or (http and http.request) or http_request or request
     local canFile = type(readfile) == "function" and type(isfile) == "function"
+    -- v2.3: menu Admin hanya muncul kalau file SkyP_Admin.txt ada di HP ini (cuma punya kamu).
+    -- Aman: tiap aksi admin tetap dicek server pakai ADMIN_KEY di file itu.
     if canFile then
-        local okR, raw = pcall(function() return isfile("SkyP_Key.txt") and readfile("SkyP_Key.txt") or nil end)
-        if okR and type(raw) == "string" then
-            local key = string.gsub(raw, "%s+", "")
-            if key ~= "" then Lic.Key = key end
-        end
-    elseif not Lic.Key then
-        Lic.Off = true -- executor tanpa fungsi file: key tidak bisa dibaca, pengecekan dilewati
+        local okA, has = pcall(function() return isfile("SkyP_Admin.txt") end)
+        if okA and has then Lic.Admin = true end
     end
     local okH, hwid = pcall(function()
         return (gethwid and gethwid()) or game:GetService("RbxAnalyticsService"):GetClientId()
@@ -2218,13 +2216,6 @@ local Hook = {
     Rejoin = true,    -- terlempar / masuk lagi
     Pabrik = true,    -- pabrik drop / berhenti
     ReportMin = 0,    -- laporan statistik tiap X menit (0 = mati)
-    Live = false,     -- v2.3: 1 pesan status live yang di-edit (sedang apa, di mana)
-    LiveSec = 60,     -- v2.3: jeda update status live (detik)
-    ModAlert = true,  -- v2.3: alert merah kalau Mod / Dev masuk world
-    BanAlert = true,  -- v2.3: alert ban / kick / disconnect
-    Ping = "",        -- v2.3: ID Discord yang di-tag saat alert penting
-    HideName = false, -- v2.4: nama akun disamarkan di semua webhook
-    HideWorld = false, -- v2.4: nama world disamarkan di semua webhook
     Queue = {},
     LastFull = {},
     Status = "-",
@@ -2246,50 +2237,6 @@ do (function()
         return false
     end
 
-    -- ===== v2.4: samarkan nama akun / world di webhook =====
-    local function mask(str)
-        str = tostring(str or "")
-        if #str <= 2 then return "***" end
-        return string.sub(str, 1, 2) .. string.rep("*", math.min(6, #str - 2))
-    end
-    function Hook.name()
-        return Hook.HideName and mask(LocalPlayer.Name) or LocalPlayer.Name
-    end
-    function Hook.world(w)
-        w = tostring(w or "")
-        if w == "" or w == "-" or not Hook.HideWorld then return w end
-        return mask(w)
-    end
-    -- semua nama world yang mungkin muncul di teks (world sekarang, tujuan, cadangan, drop, ...)
-    local function worldNames()
-        local list = {}
-        local function add(str)
-            for w in tostring(str or ""):upper():gmatch("[A-Z0-9]+") do list[#list + 1] = w end
-        end
-        pcall(function() add(Guard.worldName()) end)
-        add((tostring(Pabrik.DropWorld or ""):gsub(":.*$", "")))
-        if Hook.worldsFn then pcall(function() for _, w in ipairs(Hook.worldsFn()) do add(w) end end) end
-        return list
-    end
-    local function esc(str) return (str:gsub("[%^%$%(%)%%%.%[%]%*%+%-%?]", "%%%0")) end
-    function Hook.scrub(text)
-        text = tostring(text or "")
-        local swaps = {}
-        if Hook.HideName then
-            swaps[#swaps + 1] = LocalPlayer.Name
-            swaps[#swaps + 1] = LocalPlayer.DisplayName
-        end
-        if Hook.HideWorld then
-            for _, w in ipairs(worldNames()) do swaps[#swaps + 1] = w end
-        end
-        table.sort(swaps, function(a, b) return #tostring(a) > #tostring(b) end) -- yang panjang dulu
-        for _, w in ipairs(swaps) do
-            w = tostring(w or "")
-            if #w >= 3 then text = text:gsub(esc(w), mask(w)) end
-        end
-        return text
-    end
-
     -- jenis: "penjaga" | "stop" | "full" | "bonus" | "rejoin" | "report" | "test"
     function Hook.send(kind, text)
         if kind == "rejoin" and Hook.onRejoin then pcall(Hook.onRejoin, text) end -- webhook khusus rejoin
@@ -2300,36 +2247,6 @@ do (function()
             or (kind == "rejoin" and Hook.Rejoin) or (kind == "pabrik" and Hook.Pabrik)
         if not allow or #Hook.Queue >= 20 then return end
         table.insert(Hook.Queue, I18N.T(tostring(text)))
-    end
-
-    Hook.req = requester
-
-    -- v2.3: alert penting (embed, langsung dikirim tanpa antrian). kind: "mod" | "ban" | "test"
-    -- quiet = tanpa tag Discord
-    function Hook.alert(title, text, color, kind, quiet)
-        if not Hook.On or not Hook.valid(Hook.Url) then return end
-        if kind == "mod" and not Hook.ModAlert then return end
-        if kind == "ban" and not Hook.BanAlert then return end
-        local req = requester()
-        if not req then return end
-        local ping = (tostring(Hook.Ping or ""):gsub("%D", ""))
-        local okB, body = pcall(function()
-            return HttpService:JSONEncode({
-                username = "SkyP",
-                content = (not quiet and ping ~= "") and ("<@" .. ping .. ">") or nil,
-                embeds = { {
-                    title = Hook.scrub(I18N.T(tostring(title))),
-                    description = Hook.scrub(I18N.T(tostring(text))),
-                    color = color or 0xE85468,
-                    fields = { { name = "Akun", value = Hook.name(), inline = true } },
-                    footer = { text = os.date("%d/%m/%Y %H:%M:%S") },
-                } },
-            })
-        end)
-        if not okB then return end
-        task.spawn(function()
-            pcall(req, { Url = Hook.Url, Method = "POST", Headers = { ["Content-Type"] = "application/json" }, Body = body })
-        end)
     end
 
     task.spawn(function()
@@ -2344,7 +2261,7 @@ do (function()
                 else
                     local body = HttpService:JSONEncode({
                         username = "SkyP",
-                        content = ("**[%s]** %s"):format(Hook.name(), Hook.scrub(text)),
+                        content = ("**[%s]** %s"):format(LocalPlayer.Name, text),
                     })
                     local ok, res = pcall(req, {
                         Url = Hook.Url, Method = "POST",
@@ -2607,7 +2524,7 @@ function UI.invSlotIds()
         elseif type(slot) == "number" and type(k) == "number" then
             id, n = k, slot -- bentuk map: [id] = jumlah
         end
-        if id and id ~= 0 and not seen[id] then
+        if id and id ~= 0 and not seen[id] and not (Session.isVisual and Session.isVisual(id)) then
             if n == nil then n = invCount(id) end
             if n > 0 then seen[id] = true; out[#out + 1] = id end
         end
@@ -7222,7 +7139,7 @@ end
 
 -- Pindah world (lewat menu game), bisa langsung ke pintu tertentu
 local function goWorld(name, door)
-    if Guard.worldName() ~= "" then
+    if Guard.inWorld() then
         Guard.leaveWorld()
         task.wait(2)
     end
@@ -7279,6 +7196,7 @@ local function dropTrip(items, live, say)
         return false, "nopoint"
     end
     Pabrik.Traveling = true
+    Pabrik.TravelAt = os.clock()
     local away = name ~= home
     local ok, why = true, nil
     if away or door then
@@ -7710,6 +7628,12 @@ local function pabrikLoop(runId)
     local pickSig = Pabrik.pickSig()
     while live() do
         task.wait()
+        if not Pabrik.Traveling and Guard.pickerOpen and Guard.pickerOpen() then
+            releaseInput()
+            Pabrik.Status = "Di layar pilih world, menunggu masuk world lagi..."
+            task.wait(2)
+            continue
+        end
         if not Pabrik.Traveling and Pabrik.Home ~= "" and Guard.worldName() ~= Pabrik.Home then
             Pabrik.Status = "Bukan di world pabrik (" .. Pabrik.Home .. "), menunggu..."
             task.wait(2)
@@ -8014,7 +7938,7 @@ function Vend.labels(machines)
         if okS and type(slots) == "table" then
             for _, slot in pairs(slots) do
                 local id = type(slot) == "table" and tonumber(slot.id) or nil
-                if id and (tonumber(slot.n) or 1) > 0 then
+                if id and (tonumber(slot.n) or 1) > 0 and not (Session.isVisual and Session.isVisual(id)) then
                     seen[id] = true
                     st.inv += 1
                 end
@@ -9755,7 +9679,7 @@ UI.TabInfo = {
     ["Farmer"] = { "farmer", 1 }, ["Splice"] = { "farmer", 2 },
     ["Vending"] = { "vending", 1 },
     ["Clear World"] = { "world", 1 }, ["Growscan"] = { "world", 2 },
-    ["Tas"] = { "ekstra", 1 }, ["Bonus"] = { "ekstra", 2 }, ["Auto Chat"] = { "ekstra", 3 },
+    ["Tas"] = { "ekstra", 1 }, ["Bonus"] = { "ekstra", 2 }, ["Auto Chat"] = { "ekstra", 3 }, ["Visual Item"] = { "ekstra", 4 },
     ["Penjaga"] = { "aman", 1 }, ["Staff"] = { "aman", 2 }, ["Auto Rejoin"] = { "aman", 3 },
     ["Statistik"] = { "pantau", 1 }, ["Discord"] = { "pantau", 2 }, ["Observasi"] = { "pantau", 3 },
     ["Pengaturan"] = { "setel", 1 }, ["Koneksi"] = { "setel", 2 }, ["Admin"] = { "setel", 3 },
@@ -10559,6 +10483,61 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         return type(n) == "string" and n or ""
     end
 
+    -- v2.2: layar pilih world ("World Name" / tombol "Enter World") sedang tampil?
+    -- Saat terlempar ke layar ini, game TIDAK mengosongkan data world (nama, posisi karakter),
+    -- jadi worldName() saja tidak cukup: script mengira masih di world padahal di menu.
+    local pickList, pickScanAt = {}, -100
+    local function guiShown(g)
+        local cur = g
+        while cur and cur ~= game do
+            if cur:IsA("GuiObject") and not cur.Visible then return false end
+            if cur:IsA("LayerCollector") then return cur.Enabled == true end
+            cur = cur.Parent
+        end
+        return false
+    end
+    local function isPickBtn(d)
+        if not (d:IsA("TextButton") or d:IsA("TextLabel")) then return false end
+        local t = string.lower(tostring(d.Text or ""))
+        return string.find(t, "^%s*enter%s+world%s*$") ~= nil
+    end
+    local function pickerOpen()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return false end
+        for i = #pickList, 1, -1 do
+            local b = pickList[i]
+            if not b.Parent or not b:IsDescendantOf(pg) then table.remove(pickList, i) end
+        end
+        -- cari ulang tombolnya (GUI menu bisa dibuat ulang game) paling cepat tiap 6 detik
+        if os.clock() - pickScanAt > 6 and (#pickList == 0 or os.clock() - pickScanAt > 30) then
+            pickScanAt = os.clock()
+            local found = {}
+            pcall(function()
+                for _, d in ipairs(pg:GetDescendants()) do
+                    if isPickBtn(d) then found[#found + 1] = d end
+                end
+            end)
+            pickList = found
+        end
+        for _, b in ipairs(pickList) do
+            local ok, vis = pcall(function()
+                if not guiShown(b) or b.AbsoluteSize.X <= 4 or b.AbsoluteSize.Y <= 4 then return false end
+                -- harus benar-benar di layar (bukan disembunyikan dengan digeser keluar layar)
+                local cam = workspace.CurrentCamera
+                if not cam then return true end
+                local vp = cam.ViewportSize
+                local c = b.AbsolutePosition + b.AbsoluteSize / 2
+                return c.X > -50 and c.Y > -100 and c.X < vp.X + 50 and c.Y < vp.Y + 50
+            end)
+            if ok and vis then return true end
+        end
+        return false
+    end
+    -- benar-benar di dalam world (bukan di layar pilih world)
+    local function inWorld()
+        return worldName() ~= "" and not pickerOpen()
+    end
+
     -- Pemain lain di world ini: { id, name, role }
     local function playersHere()
         local out = {}
@@ -10661,6 +10640,8 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         local w = Refs.World
         if not w or name == "" then return false, "nama world tidak diketahui" end
         local oldFg = rawget(w, "fg")
+        local wasPicker = pickerOpen()
+        local want = string.upper(name)
         local m = Refs.Menu
         if m and type(rawget(m, "enter")) == "function" then
             pcall(m.enter, name)
@@ -10670,12 +10651,22 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         else
             return false, "fungsi masuk world tidak ketemu"
         end
-        -- berhasil kalau data world sudah diganti yang baru
-        local t0 = os.clock()
-        while alive() and os.clock() - t0 < 8 do
-            if rawget(w, "fg") ~= oldFg then return true end
+        -- v2.2: berhasil kalau data world sudah baru, namanya world tujuan, layar pilih world
+        -- sudah tertutup, dan keadaan itu bertahan 1.5 dtk (dulu cukup data world berubah,
+        -- sehingga "berhasil" padahal karakter masih / kembali di layar pilih world)
+        local t0, okSince = os.clock(), nil
+        while alive() and os.clock() - t0 < 15 do
+            local changed = rawget(w, "fg") ~= oldFg
+            local good = (changed or wasPicker) and string.upper(worldName()) == want and not pickerOpen()
+            if good then
+                okSince = okSince or os.clock()
+                if os.clock() - okSince >= 1.5 then return true end
+            else
+                okSince = nil
+            end
             task.wait(0.25)
         end
+        if pickerOpen() then return false, "masih di layar pilih world (penuh / dikunci / gagal)" end
         return false, "world penuh / dikunci / gagal"
     end
 
@@ -10753,18 +10744,6 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         Guard.Detected += #fresh
         notify("Penjaga", "Masuk world: " .. names(fresh), 6)
         Hook.send("penjaga", "Masuk world " .. worldName() .. ": " .. names(fresh))
-        -- v2.3: Mod / Dev = alert merah + tag
-        local staff = {}
-        for _, p in ipairs(fresh) do
-            if p.role then staff[#staff + 1] = p end
-        end
-        if #staff > 0 and Hook.alert then
-            local what = (Guard.Leave and "Aktivitas dihentikan, keluar world")
-                or (Guard.StopAll and "Aktivitas dihentikan")
-                or "Hanya peringatan (aktivitas tetap jalan)"
-            pcall(Hook.alert, "🚨 " .. tostring(staff[1].role) .. " datang",
-                "Masuk world **" .. worldName() .. "**: " .. names(staff) .. "\n" .. what, 0xE85468, "mod")
-        end
         if not Guard.StopAll and not Guard.Leave then return end -- hanya peringatan
         -- simpan aktivitas (kalau sedang jalan balik, pakai catatan lama)
         if Guard.Mode ~= "back" and (anyRunning() or not Guard.Saved) then
@@ -10947,6 +10926,8 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
     Guard.enterWorld = enterWorld
     Guard.leaveWorld = leaveWorld
     Guard.worldName = worldName
+    Guard.pickerOpen = pickerOpen
+    Guard.inWorld = inWorld
     Guard.anyRunning = anyRunning
     function Guard.afterEnter()
         Auto.resetReach()
@@ -11085,14 +11066,10 @@ Guard.RestEvery = math.clamp(tonumber(Guard.RestEvery) or 45, 10, 240)
 Guard.RestFor = math.clamp(tonumber(Guard.RestFor) or 3, 1, 30)
 Guard.MaxHours = math.clamp(tonumber(Guard.MaxHours) or 6, 1, 24)
 
--- ===== TAB: ADMIN (hanya dibuat untuk key yang ditandai admin di server) =====
+-- ===== TAB: ADMIN (v2.3: hanya dibuat kalau ada file SkyP_Admin.txt di HP ini) =====
 do (function()
     local Lic = Session.Lic
-    -- v2.7: tanpa key, menu Admin hanya muncul kalau file SkyP_Admin.txt ada (aksi admin tetap dicek server)
-    if not Lic.Admin then
-        local okA, hasA = pcall(function() return isfile and isfile("SkyP_Admin.txt") end)
-        if not (okA and hasA) then return end
-    end
+    if not Lic.Admin then return end
     local ATab = makeTab("Admin", "shield", "setel")
     local canFile = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
     if canFile then
@@ -12338,7 +12315,7 @@ do (function()
         if Refs.Inv then
             for _, slot in ipairs(Refs.Inv.slots) do
                 local id = slot.id
-                if id and not seen[id] and (slot.n or 0) > 0 and trashable(id) then
+                if id and not seen[id] and (slot.n or 0) > 0 and not (Session.isVisual and Session.isVisual(id)) and trashable(id) then
                     seen[id] = true
                     out[#out + 1] = { id = id, label = ("%s [%d]"):format(itemName(id), id) }
                 end
@@ -12458,6 +12435,288 @@ do (function()
             Value = Bag.LockOn,
             Callback = function(on) Bag.LockOn = on end,
         })
+    end)
+end)() end
+
+---------------------------------------------------------------------
+-- VISUAL ITEM (v2.2): item tampilan saja, hanya terlihat di layar sendiri
+---------------------------------------------------------------------
+-- Cara kerja:
+--   1. Data item asli disalin ke ID baru (900000 + ID asli) dengan nama "[VISUAL] <nama>".
+--      Item asli tidak diubah, jumlah item asli tidak ikut bertambah.
+--   2. Salinan itu ditambahkan ke tas lewat Inventory:add di sisi client (tidak kirim apa pun ke server).
+--   3. Semua fitur SkyP mengabaikan item visual (tidak di-recycle / drop / tanam).
+--   Server & pemain lain tidak melihatnya. Hilang saat rejoin / ganti server / script ditutup.
+Session.Visual = { Base = 900000, Items = {}, Status = "-" } -- di Session (bukan local) supaya tidak menambah local utama
+function Session.isVisual(id)
+    return type(id) == "number" and id >= 900000
+end
+
+do (function()
+    local Visual = Session.Visual
+    local function slotList()
+        local out = {}
+        local inv = Refs.Inv
+        if not inv then return out end
+        local okS, slots = pcall(function() return inv.slots end)
+        if not okS or type(slots) ~= "table" then return out end
+        for _, slot in pairs(slots) do
+            if type(slot) == "table" then
+                local id = tonumber(slot.id or slot.item or slot.itemId or slot[1])
+                local n = tonumber(slot.n or slot.count or slot.amount or slot[2]) or 0
+                if id and n > 0 then out[#out + 1] = { id = id, n = n } end
+            end
+        end
+        return out
+    end
+
+    -- salin data item asli ke ID visual. Hasil: id visual, atau nil + alasan
+    function Visual.clone(id)
+        local vid = Visual.Base + id
+        if type(rawget(ItemDB, vid)) == "table" then return vid end
+        local real = ItemDB[id]
+        if type(real) ~= "table" then return nil, "item #" .. tostring(id) .. " tidak ada di data item" end
+        local copy = {}
+        for k, v in pairs(real) do copy[k] = v end
+        copy.name = "[VISUAL] " .. tostring(real.name)
+        if copy.id ~= nil then copy.id = vid end
+        pcall(function()
+            local mt = getmetatable(real)
+            if type(mt) == "table" then setmetatable(copy, mt) end
+        end)
+        -- masukkan juga ke tabel item milik game, supaya tas game bisa menampilkan gambarnya
+        local db = Session.Found.ItemDB
+        if type(db) == "table" and db ~= ItemDB then
+            local key = vid
+            if rawget(db, id) ~= real and rawget(db, tostring(id)) == real then key = tostring(vid) end
+            if type(setreadonly) == "function" then pcall(setreadonly, db, false) end
+            local ok = pcall(rawset, db, key, copy)
+            if not ok or rawget(db, key) ~= copy then return nil, "data item game terkunci" end
+        end
+        rawset(ItemDB, vid, copy)
+        return vid
+    end
+
+    -- tambah item visual ke tas. Hasil: ok, jumlah / alasan
+    function Visual.add(id, n)
+        local inv = Refs.Inv
+        if not inv then return false, "inventori belum terbaca (tekan 'Hubungkan ke game')" end
+        if Session.isVisual(id) then return false, "pilih item asli, bukan item visual" end
+        local vid, err = Visual.clone(id)
+        if not vid then return false, err end
+        local before = invCount(vid)
+        local want = math.min(math.clamp(math.floor(tonumber(n) or 1), 1, 200), 200 - before)
+        if want <= 0 then return false, "sudah 200 (maksimal 1 slot)" end
+        pcall(function() inv:add(vid, want) end)
+        local got = invCount(vid) - before
+        if got <= 0 then return false, "tas penuh / game menolak item" end
+        Visual.Items[vid] = id
+        return true, got
+    end
+
+    function Visual.remove(vid)
+        local n = invCount(vid)
+        if n > 0 and Refs.Inv then pcall(function() Refs.Inv:remove(vid, n) end) end
+        Visual.Items[vid] = nil
+    end
+
+    -- hapus semua item visual (termasuk sisa dari script yang di-execute sebelumnya)
+    function Visual.clear()
+        local n = 0
+        for _, s in ipairs(slotList()) do
+            if Session.isVisual(s.id) then
+                Visual.remove(s.id)
+                n += 1
+            end
+        end
+        table.clear(Visual.Items)
+        return n
+    end
+
+    function Visual.active()
+        local out = {}
+        for _, s in ipairs(slotList()) do
+            if Session.isVisual(s.id) then out[#out + 1] = s end
+        end
+        table.sort(out, function(a, b) return a.id < b.id end)
+        return out
+    end
+
+    -- cari item dari nama / ID (maks 40 hasil, yang namanya paling mirip di atas)
+    function Visual.search(q)
+        q = string.lower((tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")))
+        local out = {}
+        if q == "" then return out end
+        local num = tonumber(q)
+        if num then
+            if not Session.isVisual(num) and type(ItemDB[num]) == "table" then out[1] = num end
+            return out
+        end
+        local rank = {}
+        for id, it in pairs(ItemDB) do
+            if type(id) == "number" and not Session.isVisual(id) and type(it) == "table" and type(it.name) == "string" then
+                local nm = string.lower(it.name)
+                local at = string.find(nm, q, 1, true)
+                if at then
+                    out[#out + 1] = id
+                    rank[id] = (nm == q and 0 or (at == 1 and 1 or 2)) * 1000 + #nm
+                end
+            end
+        end
+        table.sort(out, function(a, b)
+            if rank[a] ~= rank[b] then return rank[a] < rank[b] end
+            return a < b
+        end)
+        for i = #out, 41, -1 do out[i] = nil end
+        return out
+    end
+end)() end
+
+-- ===== TAB: VISUAL ITEM =====
+do (function()
+    local Visual = Session.Visual
+    local VsTab = makeTab("Visual Item", "sparkles", "fitur")
+    local picked, amount, removePick = nil, 200, nil
+
+    local function label(id) return ("%s [%d]"):format(itemName(id), id) end
+    local function idOf(text) return tonumber(string.match(tostring(text or ""), "%[(%d+)%]$")) end
+
+    safe(function()
+        VsTab:Paragraph({
+            Title = "Cara kerja",
+            Desc = "Item hanya muncul di tas kamu sendiri, namanya diberi tanda [VISUAL]. Server dan pemain lain "
+                .. "tidak melihatnya. Hilang saat rejoin / ganti server / script ditutup. Jangan di-drop, di-trade, "
+                .. "di-place atau dipakai: server akan menolak.",
+        })
+    end)
+    safe(function() UI.VisualStatus = VsTab:Paragraph({ Title = "Item visual di tas", Desc = "-" }) end)
+
+    local function refresh()
+        local list = Visual.active()
+        local lines, labels = {}, {}
+        for _, s in ipairs(list) do
+            lines[#lines + 1] = ("%s x%d"):format(itemName(s.id), s.n)
+            labels[#labels + 1] = label(s.id)
+        end
+        local txt = (#lines > 0) and table.concat(lines, "\n") or "Belum ada"
+        if Visual.Status ~= "-" then txt = txt .. "\n\n" .. Visual.Status end
+        if UI.VisualStatus then pcall(function() UI.VisualStatus:SetDesc(txt) end) end
+        if UI.VisualRemoveDd then
+            UI.exec(function() UI.VisualRemoveDd:Refresh((#labels > 0) and labels or { "(belum ada)" }) end)
+        end
+    end
+    local function say(t)
+        Visual.Status = t
+        refresh()
+    end
+
+    local bAdd = box(VsTab, "Tambah item visual", true)
+    local bDel = box(VsTab, "Hapus item visual", false)
+
+    safe(function()
+        bAdd:Input({
+            Title = "Cari item",
+            Desc = "Ketik nama (misal: wings) atau ID item, lalu tekan Enter",
+            Placeholder = "nama / ID item",
+            Callback = function(text)
+                local ids = Visual.search(text)
+                local labels = {}
+                for _, id in ipairs(ids) do labels[#labels + 1] = label(id) end
+                picked = ids[1]
+                if UI.VisualPickDd then
+                    UI.exec(function()
+                        UI.VisualPickDd:Refresh((#labels > 0) and labels or { "(tidak ketemu)" })
+                        if labels[1] then UI.VisualPickDd:Select(labels[1]) end
+                    end)
+                end
+                say((#ids > 0) and (#ids .. " item ketemu" .. (#ids >= 40 and " (40 teratas)" or "")) or "Item tidak ketemu")
+            end,
+        })
+    end)
+
+    safe(function()
+        UI.VisualPickDd = bAdd:Dropdown({
+            Title = "Pilih item",
+            Values = { "(cari item dulu)" },
+            Callback = function(opt)
+                local id = idOf(type(opt) == "table" and opt[1] or opt)
+                if id then picked = id end
+            end,
+        })
+    end)
+
+    addNumber(bAdd, {
+        Title = "Jumlah",
+        Min = 1, Max = 200, Step = 1, Default = amount,
+        Callback = function(v) amount = math.floor(v) end,
+    })
+
+    safe(function()
+        bAdd:Button({
+            Title = "Tambah ke tas",
+            Callback = function()
+                if not picked then
+                    say("Cari & pilih item dulu")
+                    return
+                end
+                local ok, res = Visual.add(picked, amount)
+                if ok then
+                    say(("Ditambahkan: [VISUAL] %s x%d"):format(itemName(picked), res))
+                    notify("Visual Item", ("[VISUAL] %s x%d (hanya terlihat di layar kamu)"):format(itemName(picked), res), 4)
+                else
+                    say("Gagal: " .. tostring(res))
+                end
+            end,
+        })
+    end)
+
+    safe(function()
+        UI.VisualRemoveDd = bDel:Dropdown({
+            Title = "Item visual",
+            Values = { "(belum ada)" },
+            Callback = function(opt) removePick = idOf(type(opt) == "table" and opt[1] or opt) end,
+        })
+    end)
+
+    safe(function()
+        bDel:Button({
+            Title = "Hapus item ini",
+            Callback = function()
+                if not (removePick and Session.isVisual(removePick)) then
+                    say("Pilih item visual dulu")
+                    return
+                end
+                local nm = itemName(removePick)
+                Visual.remove(removePick)
+                removePick = nil
+                say("Dihapus: " .. nm)
+            end,
+        })
+    end)
+
+    safe(function()
+        bDel:Button({
+            Title = "Hapus semua item visual",
+            Callback = function()
+                local n = Visual.clear()
+                say(n > 0 and ("Semua item visual dihapus (" .. n .. ")") or "Tidak ada item visual")
+            end,
+        })
+    end)
+
+    -- daftar diperbarui berkala (jumlah bisa berubah kalau game mengatur ulang tas)
+    task.spawn(function()
+        local last = nil
+        while alive() do
+            task.wait(3)
+            local sig = {}
+            for _, s in ipairs(Visual.active()) do sig[#sig + 1] = s.id .. "x" .. s.n end
+            local k = table.concat(sig, ",")
+            if k ~= last then
+                last = k
+                refresh()
+            end
+        end
     end)
 end)() end
 
@@ -14028,8 +14287,12 @@ do (function()
         while alive() do
             local now = os.clock()
             local wn = Guard.worldName and Guard.worldName() or ""
-            if wn ~= "" and not Pabrik.Traveling then Rejoin.LastWorld = wn end
-            if Guard.anyRunning and Guard.anyRunning() and Guard.Mode == "idle" then
+            -- v2.2: di layar pilih world nama world masih yang lama: jangan catat apa pun di sana
+            local picker = Guard.pickerOpen and Guard.pickerOpen()
+            if wn ~= "" and not Pabrik.Traveling and not picker then Rejoin.LastWorld = wn end
+            if picker or Pabrik.Traveling then
+                -- tetap pakai catatan terakhir dari dalam world (jangan ditimpa / dihapus)
+            elseif Guard.anyRunning and Guard.anyRunning() and Guard.Mode == "idle" then
                 Rejoin.Last = Guard.snapshot()
                 Rejoin.LastAt = now
             elseif now - Rejoin.LastAt > 3 and Guard.Mode == "idle" and wn ~= "" then
@@ -14118,10 +14381,13 @@ do (function()
     local function enterAndResume(world, saved, reason, force)
         local got = enterWithRetry(world, force)
         if got then
+            Rejoin.Stuck = nil
             task.wait(1.5)
             finishEnter(got, saved, reason)
             return true
         end
+        -- v2.2: gagal masuk: dicoba lagi otomatis 60 dtk lagi (watchdog layar pilih world)
+        Rejoin.Stuck = { world = world, saved = saved, at = os.clock() }
         Rejoin.Status = "Gagal masuk " .. world .. (Rejoin.Backup ~= "" and " & world cadangan" or "")
         notify("Auto Rejoin", Rejoin.Status, 5)
         Hook.send("rejoin", Rejoin.Status)
@@ -14130,7 +14396,6 @@ do (function()
 
     -- ===== terlempar dari world =====
     local function onWorldClosed(msg)
-        if Hook.onWorldClosed then pcall(Hook.onWorldClosed, msg) end -- v2.3: alert kick / ban dari world
         if not (Rejoin.On and Rejoin.World) or Rejoin.Paused or Rejoin.Busy or Pabrik.Traveling then return end
         if Guard.Mode == "away" or Guard.Mode == "out" then return end -- Penjaga yang keluar
         -- aktivitas yang sedang jalan (kalau ada) dilanjutkan; kalau tidak ada, tetap masuk lagi
@@ -14188,7 +14453,7 @@ do (function()
         Rejoin.Busy = true
         task.spawn(function()
             local saved = nil
-            if Guard.worldName() ~= "" then
+            if Guard.inWorld() then
                 if Guard.anyRunning() then saved = Guard.snapshot() end
                 Guard.stopAll()
                 Rejoin.Status = "Keluar world..."
@@ -14199,6 +14464,10 @@ do (function()
                     return
                 end
                 task.wait(math.max(2, Rejoin.DelaySec))
+            elseif Guard.anyRunning() then
+                -- v2.2: di layar pilih world tapi aktivitas masih jalan: hentikan dulu, lanjut setelah masuk
+                saved = Rejoin.Last or Guard.snapshot()
+                Guard.stopAll()
             end
             if saved and saved.world ~= world then saved = nil end -- world lain: aktivitas tidak dilanjutkan
             Rejoin.Status = "Masuk ke " .. world .. "..."
@@ -14211,7 +14480,7 @@ do (function()
         local outSince = nil
         while alive() do
             task.wait(2)
-            local out = Guard.worldName() == ""
+            local out = not Guard.inWorld() -- v2.2: layar pilih world juga dihitung di luar world
             local free = Rejoin.On and Rejoin.Keep and not Rejoin.Paused and not Rejoin.Busy and not Rejoin.Leaving
                 and not Pabrik.Traveling and Guard.Mode == "idle"
             if not (out and free) then
@@ -14227,6 +14496,59 @@ do (function()
                         if saved and (saved.world ~= world or os.clock() - Rejoin.LastAt > 600) then saved = nil end
                         Rejoin.Status = "Di luar world, masuk ke " .. world .. "..."
                         enterAndResume(world, saved, "Kembali otomatis")
+                        Rejoin.Busy = false
+                    end
+                end
+            end
+        end
+    end)
+
+    -- ===== v2.2: aktivitas jalan tapi karakter ada di layar pilih world =====
+    -- Terjadi kalau terlempar tanpa event WorldClosed, atau masuk world gagal setelah rejoin.
+    -- Data world lama masih ada, jadi Pabrik / Farm mengira masih di world dan diam di menu.
+    -- Jalan walau "Selalu kembali ke world" mati, asal Auto Rejoin aktif dan ada aktivitas jalan.
+    task.spawn(function()
+        local since = nil
+        while alive() do
+            task.wait(2)
+            local traveling = Pabrik.Traveling and os.clock() - (Pabrik.TravelAt or 0) < 300
+            local free = Rejoin.On and (Rejoin.World or Rejoin.Keep) and not Rejoin.Paused and not Rejoin.Busy
+                and not Rejoin.Leaving and not traveling and Guard.Mode == "idle"
+            local out = Guard.pickerOpen() or Guard.worldName() == ""
+            local st = Rejoin.Stuck
+            if st and not out then Rejoin.Stuck, st = nil, nil end -- sudah di world lagi (manual / fitur lain)
+            local running = Guard.anyRunning()
+            local retry = st and os.clock() - st.at >= 60
+            if not (free and out and (running or retry)) then
+                since = nil
+            else
+                since = since or os.clock()
+                local stuck = os.clock() - since
+                if running then
+                    Rejoin.Status = ("Di layar pilih world padahal aktivitas jalan (%d dtk)"):format(math.floor(stuck))
+                end
+                if retry or stuck >= math.max(10, Rejoin.DelaySec + 5) then
+                    since = nil
+                    local saved, world = nil, ""
+                    if running then
+                        saved = Rejoin.Last or Guard.snapshot()
+                        if Pabrik.Running and Pabrik.Home ~= "" then world = Pabrik.Home end
+                    elseif st then
+                        saved, world = st.saved, st.world or ""
+                    end
+                    if world == "" and saved and saved.world ~= "" then world = saved.world end
+                    if world == "" then world = Rejoin.LastWorld or "" end
+                    if world == "" then world = Rejoin.targetWorld() end
+                    if st then st.at = os.clock() end
+                    if world ~= "" and allowRejoin("di layar pilih world") then
+                        Rejoin.Busy = true
+                        if saved then saved.world = world end
+                        Guard.stopAll()
+                        Rejoin.Status = "Di layar pilih world, masuk ke " .. world .. "..."
+                        Hook.send("rejoin", (running and "Karakter ada di layar pilih world padahal aktivitas jalan"
+                            or "Masuk world tadi gagal, dicoba lagi") .. ". Masuk ke " .. world)
+                        task.wait(1)
+                        enterAndResume(world, saved, "Masuk lagi")
                         Rejoin.Busy = false
                     end
                 end
@@ -14283,11 +14605,11 @@ do (function()
             content = (urgent and ping ~= "") and ("<@" .. ping .. ">") or nil,
             embeds = { {
                 title = "Auto Rejoin",
-                description = Hook.scrub(t),
+                description = t,
                 color = color,
                 fields = {
-                    { name = "Akun", value = Hook.name(), inline = true },
-                    { name = "World", value = Hook.world((Guard.worldName() ~= "" and Guard.worldName()) or (Rejoin.LastWorld ~= "" and Rejoin.LastWorld) or "-"), inline = true },
+                    { name = "Akun", value = LocalPlayer.Name, inline = true },
+                    { name = "World", value = (Guard.worldName() ~= "" and Guard.worldName()) or (Rejoin.LastWorld ~= "" and Rejoin.LastWorld) or "-", inline = true },
                     { name = "Rejoin berhasil", value = tostring(Rejoin.Count), inline = true },
                 },
                 footer = { text = os.date("%d/%m/%Y %H:%M:%S") },
@@ -14434,7 +14756,7 @@ do (function()
         local nextTry = t0 + 12
         while alive() and os.clock() - t0 < 120 do
             if isCp and not Rejoin.On then break end -- dibatalkan
-            if Refs.World and Guard.worldName() == saved.world and Auto.here() then break end
+            if Refs.World and Guard.inWorld() and Guard.worldName() == saved.world and Auto.here() then break end
             if not Refs.World then pcall(reconnectFn) end
             if Refs.World and os.clock() >= nextTry then -- game tidak langsung masuk: masuk sendiri (diulang)
                 nextTry = os.clock() + 20
@@ -14444,7 +14766,7 @@ do (function()
             task.wait(2)
         end
         local reason = isCp and "Lanjut dari checkpoint" or "Rejoin server"
-        if alive() and Guard.worldName() == saved.world then
+        if alive() and Guard.inWorld() and Guard.worldName() == saved.world then
             pcall(reconnectFn)
             task.wait(1)
             if saved.farm or saved.clear or saved.farmer or saved.spam or saved.splice or saved.pabrik or saved.build then
@@ -14465,9 +14787,7 @@ end)() end
 
 Config.add("Reconnect", Rejoin, { "On", "World", "Server", "DelaySec", "ScriptUrl", "Keep", "Target", "LocalFile", "HookOn", "HookUrl",
     "HookPing", "Backup", "Watch", "WatchSec", "Smart", "MaxPerHour" })
-
-Config.add("Discord", Hook, { "On", "Url", "Penjaga", "Stop", "Full", "Bonus", "Rejoin", "Pabrik", "ReportMin",
-    "Live", "LiveSec", "ModAlert", "BanAlert", "Ping", "HideName", "HideWorld" })
+Config.add("Discord", Hook, { "On", "Url", "Penjaga", "Stop", "Full", "Bonus", "Rejoin", "Pabrik", "ReportMin" })
 
 -- ===== TAB: TITIK DROP (dipakai Pabrik, Farmer, Auto Farm) =====
 do (function()
@@ -14570,15 +14890,7 @@ do
         RT.DirtStop = 190  -- farming berhenti & kembali menyusun kalau dirt di tas >= angka ini (maks 190)
         RT.FarmRows = 2    -- jumlah koridor galian (dari bawah) yang dipakai untuk farm Dirt Seed
         RT.DoDig, RT.DoLava, RT.DoRows, RT.DoFarm = true, true, true, true
-        -- v2.5: auto generate world
-        RT.AutoGen = false   -- selesai 1 world -> buat world baru & mulai lagi
-        RT.GenPrefix = ""    -- awalan nama world baru (boleh kosong)
-        RT.GenLen = 8        -- jumlah huruf / angka acak di nama world
-        RT.GenMax = 0        -- berhenti setelah sekian world selesai (0 = terus)
-        RT.DoneList = {}     -- world yang sudah selesai di sesi ini
-        RT.NoPlat = false    -- v2.6: tangga dari dirt (tanpa platform)
-        pcall(Config.add, "DirtFarm", RT, {"Batch", "DirtStop", "FarmRows", "DoDig", "DoLava", "DoRows", "DoFarm",
-            "AutoGen", "GenPrefix", "GenLen", "GenMax", "NoPlat"})
+        pcall(Config.add, "DirtFarm", RT, {"Batch", "DirtStop", "FarmRows", "DoDig", "DoLava", "DoRows", "DoFarm"})
 
         -- pengaturan (sama seperti script asli)
         local MAX_PLAYERS = 1            -- jalan hanya kalau pemain di world <= angka ini
@@ -14882,25 +15194,6 @@ do
             if ok and res == true then
                 goFail = 0
                 return true
-            end
-            -- v2.6: tangga dirt dipanjat lewat A* (bisa lebih lama dari 20 dtk): ulangi selama masih maju
-            if RT.NoPlat then
-                local px, py = here()
-                for _ = 1, 8 do
-                    if not RT.Running then
-                        break
-                    end
-                    local o2, r2 = pcall(Auto.walkTo, x, y, 20)
-                    if o2 and r2 == true then
-                        goFail = 0
-                        return true
-                    end
-                    local nx, ny = here()
-                    if nx == px and ny == py then
-                        break
-                    end
-                    px, py = nx, ny
-                end
             end
             if climbLadder(x, y) or descendLadder(x, y) then
                 goFail = 0
@@ -16882,209 +17175,10 @@ do
             return false
         end
 
-        -- ===== v2.6: TANGGA TANPA PLATFORM (RT.NoPlat) =====
-        -- Tangga zigzag dari block padat di 2 kolom tepi (kiri 0-1, kanan 98-99), jarak naik 2 tile.
-        -- g = baris permukaan tanah (24). Anak tangga ke-k: block di (kolom_k, g + 2k), berdiri di atasnya.
-        --   k genap = kolom luar (0 / 99), k ganjil = kolom dalam (1 / 98).
-        --   k >= 0 (bawah tanah): block TANAH ASLI yang sengaja tidak dipecah saat membersihkan sisi
-        --                         -> tanpa biaya, dan karakter tidak pernah terjebak di dasar.
-        --   k < 0  (langit)     : dirt / rock dipasang dari bawah ke atas (9 block per sisi).
-        -- Naik-turun memakai pencari jalan biasa (gerakan "stair" & "fall"), tanpa kode panjat khusus.
-        -- Koridor galian yang sejajar anak tangga kolom dalam dimasuki dengan jalan biasa; koridor di
-        -- antaranya dimasuki dengan lompat naik 2 dari anak tangga kolom dalam di bawahnya.
-        local ST = {Fix = 0, Fail = 0, Try = {}}
-
-        local function stCols(inner)
-            local w = dims()
-            return inner, (inner < w / 2) and (inner - 1) or (inner + 1)
-        end
-
-        -- baris permukaan tanah, dicari dari y=23 ke bawah (baris dirt di atasnya tidak ikut terhitung)
-        local function stGround(inner)
-            local w = dims()
-            local ix = (inner < w / 2) and (inner + 1) or (inner - 1)
-            for y = 23, 40 do
-                if flagAt(ix, y) == 1 then
-                    return y
-                end
-            end
-            return 24
-        end
-
-        local function stGood(x, y)
-            local f = fgAt(x, y)
-            return f ~= 0 and (f == ids.dirt or f == ids.rock)
-        end
-
-        local function stNeedBreak(x, y)
-            return bgAt(x, y) ~= 0 or (fgAt(x, y) ~= 0 and flagAt(x, y) ~= 2)
-        end
-
-        -- pecah (x,y) sambil berdiri di (sx,sy) atau di tile alt. return true = ada yang dikerjakan
-        local function stBreak(sx, sy, x, y, ax, ay)
-            local key = "s" .. x .. "," .. y
-            if isSkipped(key) or not stNeedBreak(x, y) then
-                return false
-            end
-            local mx, my = here()
-            if (mx == sx and my == sy) or (ax and mx == ax and my == ay) then
-                if punch(x, y) == nil then
-                    markSkip(key, 60)
-                end
-            elseif not goTo(sx, sy) then
-                markSkip(key, 30)
-            end
-            return true
-        end
-
-        -- pijakan berikutnya (o, r+3) bukan dirt/rock (lava / kosong): berdiri di (o, r+1) di atas tanah
-        -- yang belum dipecah, pecah isinya, lalu pasang dirt/rock. return true = sedang dikerjakan
-        local function stFix(r, o)
-            local fx, fy = o, r + 3
-            if not stGood(o, r + 2) then
-                logEv("tangga dirt: pijakan sementara (" .. o .. "," .. (r + 2) .. ") bukan dirt/rock, berhenti di sini")
-                setStatus("Tangga dirt berhenti di (" .. o .. "," .. (r + 2) .. "): tanahnya bukan dirt/rock")
-                return false
-            end
-            if fgAt(fx, fy) == 0 and not fillBlockId() then
-                setStatus("Tangga dirt: butuh 1 Dirt/Rock untuk pijakan (" .. fx .. "," .. fy .. "), dilanjutkan nanti")
-                return false
-            end
-            ST.Fix = ST.Fix + 1
-            if ST.Fix > 60 then
-                ST.Fix = 0
-                logEv("tangga dirt: pijakan (" .. fx .. "," .. fy .. ") gagal diperbaiki")
-                return false
-            end
-            local mx, my = here()
-            if mx == o and my == r + 1 then
-                if fgAt(fx, fy) ~= 0 then
-                    if punch(fx, fy) == nil then
-                        logEv("tangga dirt: (" .. fx .. "," .. fy .. ") tidak bisa dipecah")
-                        return false
-                    end
-                else
-                    place(fx, fy, fillBlockId())
-                    task.wait(0.3)
-                end
-            else
-                goTo(o, r + 1)
-            end
-            return true
-        end
-
-        -- bersihkan 2 kolom tepi dari atas ke bawah, anak tangga (tanah asli) disisakan
-        local function carveStep(inner)
-            local _, outer = stCols(inner)
-            local g = stGround(inner)
-            if not stGood(outer, g) then
-                if ST.Warn ~= inner then
-                    ST.Warn = inner
-                    logEv("tangga dirt x=" .. outer .. ": permukaan (" .. outer .. "," .. g .. ") bukan dirt/rock, sisi dilewati")
-                end
-                setStatus("Tangga dirt: permukaan (" .. outer .. "," .. g .. ") bukan dirt/rock, sisi ini dilewati")
-                return false
-            end
-            for k = 0, 40 do
-                local r = g - 1 + 2 * k -- tile berdiri anak tangga ke-k
-                if r > 53 then
-                    break
-                end
-                local c = (k % 2 == 0) and outer or inner
-                local o = (c == inner) and outer or inner
-                -- kolom seberang, baris r dan r+1
-                if stBreak(c, r, o, r) then
-                    return true
-                end
-                if r + 1 <= 53 and stBreak(c, r, o, r + 1) then
-                    return true
-                end
-                if r + 2 <= 53 then
-                    -- pijakan anak tangga berikutnya harus padat dulu, baru tile di atasnya dibuka
-                    if r + 3 <= 52 and not stGood(o, r + 3) then
-                        return stFix(r, o)
-                    end
-                    ST.Fix = 0
-                    if stBreak(c, r, o, r + 2, o, r + 1) then
-                        return true
-                    end
-                end
-            end
-            return false
-        end
-
-        -- anak tangga langit yang belum ada (paling bawah dulu). return k, kolom, y
-        local function stSkyMissing(inner)
-            local _, outer = stCols(inner)
-            local g = stGround(inner)
-            if not stGood(outer, g) then
-                return nil -- sisi ini tidak punya tangga dirt
-            end
-            for k = -1, -9, -1 do
-                local y = g + 2 * k
-                if y < 6 then
-                    break
-                end
-                local c = (k % 2 == 0) and outer or inner
-                if fgAt(c, y) == 0 and (ST.Try[c .. "," .. y] or 0) < 10 then
-                    return k, c, y
-                end
-            end
-            return nil
-        end
-
-        -- pasang 1 anak tangga langit: berdiri di anak tangga di bawahnya (kolom seberang)
-        local function skyStep(inner)
-            local k, c, y = stSkyMissing(inner)
-            if not k then
-                return false
-            end
-            local bid = fillBlockId()
-            if not bid then
-                setStatus("Tangga atas: Dirt/Rock di tas habis, dilanjutkan setelah farm")
-                return false
-            end
-            local _, outer = stCols(inner)
-            local sc = (c == inner) and outer or inner
-            local sr = y + 1
-            local mx, my = here()
-            if mx == sc and my == sr then
-                ST.Fail = 0
-                local key = c .. "," .. y
-                ST.Try[key] = (ST.Try[key] or 0) + 1
-                setStatus("Pasang anak tangga di (" .. c .. "," .. y .. ")")
-                place(c, y, bid)
-                task.wait(0.3)
-            elseif not goTo(sc, sr) then
-                ST.Fail = ST.Fail + 1
-                if ST.Fail >= 6 then
-                    ST.Fail = 0
-                    logEv("tangga atas x=" .. inner .. ": tidak bisa ke (" .. sc .. "," .. sr .. ")")
-                    return false
-                end
-            end
-            return true
-        end
-
         local function main(id)
             goFail = 0
             RT.ShortDrop = false
             resolveIds()
-            local noPlat = RT.NoPlat == true
-            ST.Fix, ST.Fail, ST.Warn = 0, 0, nil
-            table.clear(ST.Try)
-            if noPlat then
-                -- v2.6: tangga dari dirt. Sisi dibersihkan sambil menyisakan anak tangga dari tanah asli
-                ids.platform = (findPlatformId())
-                logEv("preflight: mode tangga dirt (tanpa platform)")
-                local sw = dims()
-                phase(id, "Bentuk tangga kiri (tanpa platform)", function()
-                    return carveStep(1)
-                end)
-                phase(id, "Bentuk tangga kanan (tanpa platform)", function()
-                    return carveStep(sw - 2)
-                end)
-            else
             local platName, platSimilar
             ids.platform, platName, platSimilar = findPlatformId()
             platName = platName or "Wooden Platform"
@@ -17139,7 +17233,6 @@ do
                 setStatus("Platform di tas " .. count(ids.platform) .. " (<26), tahap platform kanan dilewati")
                 task.wait(2)
             end
-            end -- v2.6: akhir cabang platform
 
             -- gali SATU baris satu baris dari atas (lava ikut dipecah & lantainya ditutup)
             -- v8.3: gali -> lava. Lava di lantai menutup jalan, jadi sebagian tile bisa tertinggal
@@ -17201,32 +17294,8 @@ do
             PR.Miss, PR.Stuck = 0, nil
             RT.ShortDrop = true
             local stale = 0
-            if noPlat then
-                -- v2.6: sisa tangga yang tadi tertunda (belum ada dirt/rock untuk pijakan)
-                local sw = dims()
-                phase(id, "Bentuk tangga kiri (lanjutan)", function()
-                    return carveStep(1)
-                end)
-                phase(id, "Bentuk tangga kanan (lanjutan)", function()
-                    return carveStep(sw - 2)
-                end)
-            end
             while alive(id) and not PR.Done do
                 local placed0, harv0 = RT.Placed, RT.Harvested
-                -- v2.6: anak tangga bagian langit (dipasang begitu ada dirt / rock)
-                if noPlat then
-                    local sw = dims()
-                    for _, ix in ipairs({1, sw - 2}) do
-                        if alive(id) and stSkyMissing(ix) and fillBlockId() then
-                            phase(id, "Pasang tangga atas x=" .. ix, function()
-                                return skyStep(ix)
-                            end)
-                        end
-                    end
-                    if not alive(id) then
-                        break
-                    end
-                end
                 -- lubang bekas lava yang tadi belum sempat ditutup (waktu itu belum ada dirt)
                 if #lavaPending > 0 and fillBlockId() then
                     phase(id, "Tutup lubang bekas lava", lavaFillStep)
@@ -17277,171 +17346,18 @@ do
             end
         end
 
-        -- ===== v2.5: AUTO GENERATE WORLD =====
-        -- Dirt Farm selesai (semua baris dirt tersusun) -> catat world -> masuk world baru bernama acak
-        -- (nama yang belum ada = world baru dibuat game) -> cek masih alami -> Dirt Farm dari awal.
-        local GEN_CHARS = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
-        local GEN_FILE = "Fian/dirtfarm_worlds.txt"
-
-        local function genName()
-            local pre = string.sub((tostring(RT.GenPrefix or ""):upper():gsub("[^A-Z0-9]", "")), 1, 12)
-            local n = math.max(4, math.min(12, floor(tonumber(RT.GenLen) or 8)))
-            local t = {}
-            for i = 1, n do
-                local k = math.random(1, #GEN_CHARS)
-                t[i] = string.sub(GEN_CHARS, k, k)
-            end
-            return pre .. table.concat(t)
-        end
-
-        local function recordDone(name)
-            RT.DoneList[#RT.DoneList + 1] = name
-            pcall(function()
-                if type(writefile) ~= "function" then return end
-                if type(makefolder) == "function" and type(isfolder) == "function" and not isfolder("Fian") then makefolder("Fian") end
-                local line = name .. "  " .. os.date("%d/%m/%Y %H:%M") .. "\n"
-                if type(appendfile) == "function" and type(isfile) == "function" and isfile(GEN_FILE) then
-                    appendfile(GEN_FILE, line)
-                else
-                    local old = (type(isfile) == "function" and isfile(GEN_FILE)) and readfile(GEN_FILE) or ""
-                    writefile(GEN_FILE, old .. line)
-                end
-            end)
-        end
-
-        -- world baru yang masih alami: ukuran normal, sendirian, langit kosong, belum ada platform
-        local function isFreshWorld()
-            local w, h = dims()
-            if w < 100 or h < 54 then
-                return false, "ukuran world " .. tostring(w) .. "x" .. tostring(h)
-            end
-            if playerCount() > 1 then
-                return false, "ada pemain lain"
-            end
-            for y = 2, 20 do
-                for x = 2, 97 do
-                    if fgAt(x, y) ~= 0 then
-                        return false, "sudah ada bangunan di (" .. x .. "," .. y .. ")"
-                    end
-                end
-            end
-            if ids.platform and countPlaced(ids.platform) > 0 then
-                return false, "sudah ada platform"
-            end
-            return true
-        end
-
-        -- return true kalau sudah berada di world baru yang siap digarap
-        local function nextWorld(id)
-            local from = worldName()
-            if from ~= "" then
-                recordDone(from)
-            end
-            local nDone = #RT.DoneList
-            local max = floor(tonumber(RT.GenMax) or 0)
-            if max > 0 and nDone >= max then
-                RT.endMsg = "Auto generate selesai: " .. nDone .. " world jadi (batas " .. max .. "). Terakhir: " .. from
-                Hook.send("stop", RT.endMsg)
-                return false
-            end
-            local bag = RT.NoPlat and PLATFORM_NEED or count(ids.platform)
-            if bag < PLATFORM_NEED then
-                RT.endMsg = "World " .. from .. " selesai. Auto generate berhenti: platform di tas " .. bag
-                    .. " (butuh " .. PLATFORM_NEED .. " untuk world baru)"
-                Hook.send("stop", RT.endMsg)
-                return false
-            end
-            Pabrik.Traveling = true -- supaya Auto Rejoin / Penjaga tidak memotong perpindahan world
-            local got, lastWhy = nil, "-"
-            for try = 1, 8 do
-                if not alive(id) then
-                    break
-                end
-                local name = genName()
-                setStatus(("Auto generate: masuk world baru %s (%d/8)"):format(name, try))
-                logEv("auto generate: coba " .. name)
-                if worldName() ~= "" then
-                    pcall(Guard.leaveWorld)
-                    task.wait(2)
-                end
-                local ok, err = Guard.enterWorld(name)
-                if ok then
-                    task.wait(2)
-                    pcall(Guard.afterEnter)
-                    task.wait(1)
-                    local fresh, why = isFreshWorld()
-                    if fresh then
-                        got = name
-                        break
-                    end
-                    lastWhy = name .. " bukan world baru (" .. tostring(why) .. ")"
-                else
-                    lastWhy = "gagal masuk " .. name .. " (" .. tostring(err) .. ")"
-                end
-                logEv("auto generate: " .. lastWhy)
-                task.wait(3)
-            end
-            Pabrik.Traveling = false
-            if not alive(id) then
-                return false
-            end
-            if not got then
-                RT.endMsg = "World " .. from .. " selesai. Auto generate gagal: " .. lastWhy
-                Hook.send("stop", RT.endMsg)
-                return false
-            end
-            -- catatan milik world lama dibuang
-            table.clear(skip)
-            table.clear(lavaPending)
-            prReset()
-            if zoneSet then
-                Pabrik.Zone = nil
-                zoneSet = false
-            end
-            local msg = ("World %s selesai (%d jadi). Lanjut di world baru %s"):format(from, nDone, got)
-            logEv(msg)
-            notify("Dirt Farm", msg, 6)
-            Hook.send("stop", "Dirt Farm: " .. msg)
-            setStatus("World baru " .. got .. ", mulai dari awal")
-            return true
-        end
-
         local function runner(id)
             local errors = 0
-            local t0, made = os.clock(), 0 -- made = jumlah world baru yang dibuat di run ini
             while alive(id) do
                 local ok, err = pcall(main, id)
                 if ok then
-                    -- v2.5: selesai penuh + auto generate nyala -> world baru, ulang dari awal
-                    if not (alive(id) and RT.AutoGen and PR.Done) then
-                        break
-                    end
-                    if made > 0 and os.clock() - t0 < 120 then
-                        -- pengaman: world "selesai" terlalu cepat = ada yang salah, jangan lompat world terus
-                        RT.endMsg = "Auto generate dihentikan: world selesai terlalu cepat (" .. floor(os.clock() - t0) .. " dtk)"
-                        break
-                    end
-                    local okN, went = pcall(nextWorld, id)
-                    Pabrik.Traveling = false
-                    if not okN then
-                        RT.endMsg = "Auto generate error: " .. tostring(went)
-                        logEv(RT.endMsg)
-                        break
-                    end
-                    if not went then
-                        break
-                    end
-                    RT.endMsg = nil
-                    errors, t0, made = 0, os.clock(), made + 1
-                    task.wait(1)
+                    break
                 end
-                if not ok then
                 errors = errors + 1
                 warn("[SkyP] Dirt Farm error: " .. tostring(err))
                 logEv("ERROR #" .. errors .. ": " .. tostring(err))
                 setStatus("Error (coba lagi): " .. tostring(err))
                 task.wait(2)
-                end
             end
             if alive(id) then
                 RT.stop(RT.endMsg or "Dirt Farm selesai")
@@ -17562,66 +17478,6 @@ do
             })
         end)
 
-        -- v2.5: auto generate world
-        local gen = box(tab, "Auto generate world", true)
-        safe(function()
-            gen:Toggle({
-                Title = "Auto generate world",
-                Desc = "Setelah semua baris dirt tersusun: buat world baru (nama acak) lalu Dirt Farm lagi dari awal. "
-                    .. "Tiap world butuh 52 platform di tas, kecuali 'Tangga tanpa platform' dinyalakan",
-                Value = RT.AutoGen == true,
-                Callback = function(v)
-                    RT.AutoGen = v and true or false
-                end,
-            })
-        end)
-        safe(function()
-            gen:Input({
-                Title = "Awalan nama world",
-                Desc = "Contoh: SKYDF -> SKYDFX7K2M9QA. Kosong = acak semua",
-                Value = RT.GenPrefix,
-                Placeholder = "SKYDF",
-                Callback = function(text)
-                    RT.GenPrefix = string.sub((tostring(text or ""):upper():gsub("[^A-Z0-9]", "")), 1, 12)
-                end,
-            })
-        end)
-        addNumber(gen, {
-            Title = "Jumlah karakter acak",
-            Desc = "Makin panjang, makin kecil kemungkinan nama sudah dipakai orang",
-            Min = 4, Max = 12, Default = math.max(4, math.min(12, tonumber(RT.GenLen) or 8)),
-            Callback = function(v)
-                RT.GenLen = math.max(4, math.min(12, floor(v)))
-            end,
-        })
-        addNumber(gen, {
-            Title = "Jumlah world",
-            Desc = "Berhenti setelah sekian world selesai. 0 = terus sampai platform habis",
-            Min = 0, Max = 50, Default = math.max(0, math.min(50, tonumber(RT.GenMax) or 0)),
-            Callback = function(v)
-                RT.GenMax = math.max(0, floor(v))
-            end,
-        })
-        safe(function()
-            gen:Button({
-                Title = "Salin daftar world selesai",
-                Desc = "World yang selesai di sesi ini. Semua riwayat ada di file Fian/dirtfarm_worlds.txt",
-                Callback = function()
-                    if #RT.DoneList == 0 then
-                        notify("Dirt Farm", "Belum ada world yang selesai di sesi ini", 3)
-                        return
-                    end
-                    local clip = setclipboard or toclipboard
-                    if type(clip) ~= "function" then
-                        notify("Dirt Farm", "World selesai: " .. table.concat(RT.DoneList, ", "), 8)
-                        return
-                    end
-                    pcall(clip, table.concat(RT.DoneList, "\n"))
-                    notify("Dirt Farm", #RT.DoneList .. " nama world disalin", 3)
-                end,
-            })
-        end)
-
         -- v8: pengaturan
         local opt = box(tab, "Pengaturan", false)
         addNumber(opt, {
@@ -17648,17 +17504,6 @@ do
                 RT.FarmRows = math.max(1, math.min(8, floor(v)))
             end,
         })
-        safe(function()
-            opt:Toggle({
-                Title = "Tangga tanpa platform",
-                Desc = "Tangga dibuat dari tanah asli di kolom tepi + 18 dirt/rock untuk bagian atas. Tidak butuh platform sama sekali. "
-                    .. "Pakai di world baru (bukan world yang sisinya sudah dikosongkan)",
-                Value = RT.NoPlat == true,
-                Callback = function(v)
-                    RT.NoPlat = v and true or false
-                end,
-            })
-        end)
         for _, o in ipairs({
             {"DoDig", "Tahap: gali", "Gali baris 25, 27, ... 53 (lantai di antaranya tidak dipecah)"},
             {"DoLava", "Tahap: lava", "Pecah lava lalu ganti dengan dirt"},
@@ -17686,7 +17531,6 @@ do
                         .. "\nInfo   : " .. RT.Status
                         .. "\nDetak  : " .. string.format("%.0f", os.clock() - (RT.Beat or os.clock())) .. " dtk lalu"
                         .. "\nHitung : pecah " .. RT.Broken .. " | pasang " .. RT.Placed .. " | tanam " .. RT.Planted .. " | panen " .. RT.Harvested
-                        .. (RT.AutoGen and ("\nWorld  : " .. #RT.DoneList .. " selesai" .. ((#RT.DoneList > 0) and (" (terakhir " .. RT.DoneList[#RT.DoneList] .. ")") or "")) or "")
                     if txt ~= last then
                         last = txt
                         pcall(function()
@@ -18053,23 +17897,6 @@ do (function()
         })
     end)
 
-    safe(function()
-        dMain:Toggle({
-            Title = "Sembunyikan nama akun",
-            Desc = "Nama akun disamarkan di semua pesan webhook (contoh: us******)",
-            Value = Hook.HideName,
-            Callback = function(on) Hook.HideName = on end,
-        })
-    end)
-    safe(function()
-        dMain:Toggle({
-            Title = "Sembunyikan nama world",
-            Desc = "Nama world disamarkan di semua pesan webhook, termasuk webhook rejoin",
-            Value = Hook.HideWorld,
-            Callback = function(on) Hook.HideWorld = on end,
-        })
-    end)
-
     addNumber(dMain, {
         Title = "Laporan statistik (menit)",
         Desc = "Kirim statistik sesi tiap X menit. 0 = mati",
@@ -18092,284 +17919,6 @@ do (function()
                 Callback = function(on) Hook[item[1]] = on end,
             })
         end)
-    end
-
-    -- v2.3: status live & alert
-    local dLive = box(DcTab, "Live status & alert", true)
-    safe(function()
-        dLive:Toggle({
-            Title = "Status live",
-            Desc = "1 pesan di Discord yang terus di-edit: sedang apa, di world mana, pemain sekitar, statistik",
-            Value = Hook.Live,
-            Callback = function(on) Hook.Live = on end,
-        })
-    end)
-    addNumber(dLive, {
-        Title = "Update status live (detik)",
-        Min = 30, Max = 300, Step = 10, Default = Hook.LiveSec,
-        Callback = function(v) Hook.LiveSec = math.floor(v) end,
-    })
-    safe(function()
-        dLive:Toggle({
-            Title = "Alert Mod / Dev datang",
-            Desc = "Pesan merah + tag kalau Moderator / Developer masuk world (pakai deteksi Penjaga)",
-            Value = Hook.ModAlert,
-            Callback = function(on) Hook.ModAlert = on end,
-        })
-    end)
-    safe(function()
-        dLive:Toggle({
-            Title = "Alert ban / kick / disconnect",
-            Desc = "Kena ban atau kick (dari server / world) = pesan merah + tag. Disconnect biasa = pesan kuning",
-            Value = Hook.BanAlert,
-            Callback = function(on) Hook.BanAlert = on end,
-        })
-    end)
-    safe(function()
-        dLive:Input({
-            Title = "Tag ID Discord",
-            Desc = "Di-tag saat Mod datang / ban, supaya ada notifikasi di HP. Kosong = tanpa tag",
-            Value = Hook.Ping,
-            Placeholder = "123456789012345678",
-            Callback = function(text) Hook.Ping = (tostring(text or ""):gsub("%D", "")) end,
-        })
-    end)
-    safe(function()
-        dLive:Button({
-            Title = "Tes alert & status live",
-            Callback = function()
-                if not Hook.valid(Hook.Url) then
-                    notify("Discord", "Isi URL webhook dulu", 3)
-                    return
-                end
-                local was = Hook.On
-                Hook.On = true
-                Hook.alert("🚨 Tes alert", "Begini tampilan alert saat Mod datang / kena ban", 0xE85468, "test")
-                if Hook.livePush then task.spawn(Hook.livePush) end
-                Hook.On = was
-                notify("Discord", "Alert tes & status live dikirim", 3)
-            end,
-        })
-    end)
-end)() end
-
--- ===== v2.3: DISCORD STATUS LIVE + ALERT BAN / KICK =====
--- Status live: 1 pesan di-edit tiap Hook.LiveSec detik (langsung di-update kalau pindah world /
--- aktivitas berubah). ID pesan disimpan di file, jadi setelah rejoin pesan yang sama yang di-edit.
-do (function()
-    local HttpService = game:GetService("HttpService")
-    local GuiService = game:GetService("GuiService")
-    local canFile = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
-    local MSGF = "Fian/live_" .. tostring(LocalPlayer.UserId) .. ".txt"
-    Hook.worldsFn = function() -- v2.4: untuk Hook.scrub
-        local rt = Session.RT
-        return { Rejoin.LastWorld, Rejoin.Target, Rejoin.Backup, rt and table.concat(rt.DoneList or {}, " ") or "" }
-    end
-    local T0 = os.clock()
-    local msgId, msgUrl = nil, nil
-
-    local function dur(sec)
-        sec = math.max(0, math.floor(sec))
-        local h, m = sec // 3600, sec % 3600 // 60
-        return h > 0 and ("%dj %dm"):format(h, m) or ("%dm"):format(m)
-    end
-    local function cut(str, n)
-        str = tostring(str or "")
-        return #str > n and (string.sub(str, 1, n - 3) .. "...") or str
-    end
-
-    local function loadId()
-        msgId = nil
-        if not canFile then return end
-        pcall(function()
-            if isfile(MSGF) then
-                local id, url = string.match(readfile(MSGF), "^(%d+)\n(.*)$")
-                if id and url == Hook.Url then msgId = id end
-            end
-        end)
-    end
-    local function saveId(id)
-        msgId = id
-        if not canFile then return end
-        pcall(function()
-            if type(makefolder) == "function" and type(isfolder) == "function" and not isfolder("Fian") then makefolder("Fian") end
-            writefile(MSGF, id .. "\n" .. Hook.Url)
-        end)
-    end
-
-    local function build(over)
-        local wn = Guard.worldName() or ""
-        local x, y = Auto.here()
-        local act = {}
-        local O = Session.Obs
-        if O and O.modules then
-            local ok, list = pcall(O.modules)
-            if ok and type(list) == "table" then
-                for _, m in ipairs(list) do
-                    if m[2] and m[1] ~= "Penjaga" and m[1] ~= "Rejoin" then
-                        act[#act + 1] = "▶ **" .. m[1] .. "**" .. ((m[3] and m[3] ~= "") and (" - " .. cut(m[3], 150)) or "")
-                    end
-                end
-            end
-        end
-        local nPlayers, staff = 0, {}
-        local okP, list = pcall(Guard.playersHere)
-        if okP and type(list) == "table" then
-            nPlayers = #list
-            for _, p in ipairs(list) do
-                if p.role then staff[#staff + 1] = p.name .. " (" .. p.role .. ")" end
-            end
-        end
-        local status = (over and over.text)
-            or ((#staff > 0) and "🚨 Ada staff di world")
-            or ((#act > 0) and "🟢 Sedang jalan")
-            or ((wn ~= "") and "🟡 Diam di world" or "🟡 Di luar world")
-        local color = (over and over.color)
-            or ((#staff > 0) and 0xE85468) or ((#act > 0) and 0x2ECC71) or 0x95A5A6
-        local fields = {
-            { name = "World", value = (wn ~= "") and (Hook.world(wn) .. (x and (" (" .. x .. ", " .. tostring(y) .. ")") or "")) or "-", inline = true },
-            { name = "Pemain di world", value = tostring(nPlayers) .. ((#staff > 0) and ("\n🚨 " .. cut(table.concat(staff, ", "), 200)) or ""), inline = true },
-            { name = "Online", value = dur(os.clock() - T0) .. (((tonumber(Rejoin.Count) or 0) > 0) and (" · rejoin " .. Rejoin.Count .. "x") or ""), inline = true },
-        }
-        local okS, st = pcall(Stats.text)
-        if okS and type(st) == "string" and st ~= "" then
-            fields[#fields + 1] = { name = "Statistik", value = "```\n" .. cut(st, 990) .. "\n```" }
-        end
-        if O and O.warnings then
-            local okW, w = pcall(O.warnings)
-            if okW and type(w) == "string" and w ~= "" and w ~= "Tidak ada peringatan" then
-                fields[#fields + 1] = { name = "Peringatan", value = cut(Hook.scrub(w), 1000) }
-            end
-        end
-        local ts = nil
-        pcall(function() ts = DateTime.now():ToIsoDate() end)
-        return {
-            username = "SkyP",
-            embeds = { {
-                title = cut(status .. " - " .. Hook.name(), 250),
-                description = (#act > 0) and cut(Hook.scrub(table.concat(act, "\n")), 3900) or "Tidak ada aktivitas yang jalan",
-                color = color,
-                fields = fields,
-                footer = { text = "SkyP v" .. tostring(Session.Lic and Session.Lic.Ver or "?") .. " · update tiap " .. tostring(Hook.LiveSec) .. " dtk" },
-                timestamp = ts,
-            } },
-        }
-    end
-
-    -- kirim / edit pesan status live. return true kalau berhasil
-    local function push(over)
-        local req = Hook.req and Hook.req()
-        if not req or not Hook.valid(Hook.Url) then return false end
-        if msgUrl ~= Hook.Url then
-            msgUrl = Hook.Url
-            loadId()
-        end
-        local okB, body = pcall(function() return HttpService:JSONEncode(build(over)) end)
-        if not okB then return false end
-        local H = { ["Content-Type"] = "application/json" }
-        if msgId then
-            local ok, res = pcall(req, { Url = Hook.Url .. "/messages/" .. msgId, Method = "PATCH", Headers = H, Body = body })
-            local code = ok and type(res) == "table" and tonumber(res.StatusCode or res.Status) or nil
-            if ok and (code == nil or code < 300) then return true end
-            if code ~= 404 then return false end -- limit / jaringan: coba lagi nanti
-        end
-        local ok, res = pcall(req, { Url = Hook.Url .. "?wait=true", Method = "POST", Headers = H, Body = body })
-        if ok and type(res) == "table" then
-            local okJ, d = pcall(HttpService.JSONDecode, HttpService, tostring(res.Body or ""))
-            if okJ and type(d) == "table" and d.id then
-                saveId(tostring(d.id))
-                return true
-            end
-        end
-        return false
-    end
-    Hook.livePush = function() pcall(push) end
-
-    task.spawn(function()
-        task.wait(8)
-        local last, lastSig = -1e9, ""
-        while alive() do
-            if Hook.On and Hook.Live and not Rejoin.Leaving then
-                local okA, any = pcall(Guard.anyRunning)
-                local sig = tostring(Guard.worldName()) .. "|" .. tostring(okA and any)
-                local gap = os.clock() - last
-                if gap >= math.max(30, tonumber(Hook.LiveSec) or 60) or (sig ~= lastSig and gap >= 10) then
-                    last, lastSig = os.clock(), sig
-                    pcall(push)
-                end
-            end
-            task.wait(2)
-        end
-        -- script ditutup sendiri (bukan sedang rejoin server): tandai offline
-        if Hook.On and Hook.Live and not Rejoin.Leaving then
-            pcall(push, { text = "⚫ Script ditutup", color = 0x4B4B4B })
-        end
-    end)
-
-    -- ===== alert ban / kick / disconnect =====
-    local BAN_WORDS = { "ban", "kick", "blacklist", "exploit", "cheat", "unexpected client behavior" }
-    local function banWord(m)
-        m = string.lower(tostring(m or ""))
-        for _, w in ipairs(BAN_WORDS) do
-            if string.find(m, w, 1, true) then return w end
-        end
-        return nil
-    end
-
-    local dcSent = false
-    local function onDc(msg)
-        if dcSent or not alive() then return end
-        dcSent = true
-        local code = ""
-        pcall(function() code = (tostring(GuiService:GetErrorCode()):gsub("^Enum%.ConnectionError%.", "")) end)
-        local txt = "Pesan: " .. tostring(msg)
-            .. ((code ~= "" and code ~= "OK") and ("\nKode: " .. code) or "")
-            .. "\nWorld terakhir: " .. ((Rejoin.LastWorld ~= "" and Rejoin.LastWorld) or "-")
-        local ban = banWord(msg)
-        if ban then
-            Hook.alert("⛔ Kena ban / kick dari server", txt, 0xE85468, "ban")
-        else
-            local rj = (Rejoin.On and Rejoin.Server) and "\nAuto Rejoin: mencoba masuk lagi" or "\nAuto Rejoin mati"
-            Hook.alert("🔌 Disconnect dari server", txt .. rj, 0xFFB020, "ban", Rejoin.On and Rejoin.Server)
-        end
-        if Hook.On and Hook.Live then
-            task.spawn(function()
-                pcall(push, { text = ban and "⛔ Kena ban / kick" or "🔴 Disconnect", color = ban and 0xE85468 or 0xFFB020 })
-            end)
-        end
-    end
-
-    pcall(function()
-        table.insert(Connections, GuiService.ErrorMessageChanged:Connect(function(msg)
-            if type(msg) == "string" and msg ~= "" then onDc(msg) end
-        end))
-    end)
-    task.spawn(function()
-        local okP, overlay = pcall(function()
-            return game:GetService("CoreGui"):WaitForChild("RobloxPromptGui", 15):WaitForChild("promptOverlay", 15)
-        end)
-        if okP and overlay then
-            table.insert(Connections, overlay.ChildAdded:Connect(function(c)
-                if c.Name == "ErrorPrompt" then
-                    task.wait(0.5)
-                    local m = ""
-                    pcall(function() m = GuiService:GetErrorMessage() end)
-                    onDc(m ~= "" and m or "Layar error Roblox")
-                end
-            end))
-        end
-    end)
-
-    -- terlempar dari world karena kick / ban (dipanggil dari Auto Rejoin)
-    function Hook.onWorldClosed(msg)
-        local text = (tostring(msg or ""):gsub("`.", ""))
-        local w = banWord(text)
-        if not w then return end
-        local world = (Guard.worldName() ~= "" and Guard.worldName()) or Rejoin.LastWorld or "-"
-        Hook.alert("⛔ Di-kick / diban dari world " .. tostring(world), "Pesan: " .. text, 0xE85468, "ban")
-        if Hook.On and Hook.Live then
-            task.spawn(function() pcall(push, { text = "⛔ Di-kick / diban dari world", color = 0xE85468 }) end)
-        end
     end
 end)() end
 
@@ -18543,7 +18092,10 @@ do (function()
         for _, m in ipairs(modules()) do
             if m[2] and m[4] then movingOn = movingOn or m[1] end
         end
-        if movingOn and pos.x and now - pos.t >= 15 then
+        local onPicker = Guard.pickerOpen and Guard.pickerOpen()
+        if movingOn and onPicker then
+            w[#w + 1] = "Di layar pilih world padahal " .. movingOn .. " jalan" .. (Rejoin.On and " (Auto Rejoin akan masuk lagi)" or " (nyalakan Auto Rejoin supaya masuk lagi otomatis)")
+        elseif movingOn and pos.x and now - pos.t >= 15 then
             w[#w + 1] = "Karakter diam " .. dur(now - pos.t) .. " di (" .. pos.x .. "," .. tostring(pos.y) .. ") padahal " .. movingOn .. " jalan"
         end
         local miss = {}
@@ -18573,7 +18125,8 @@ do (function()
         end
         for _, m in ipairs(modules()) do
             local sg = Obs.Sig[m[1]]
-            if m[2] and sg and now - sg.t >= 20 then
+            -- v2.2: hanya fitur yang menggerakkan karakter (Rejoin / Penjaga memang statusnya jarang berubah)
+            if m[2] and m[4] and sg and now - sg.t >= 20 then
                 w[#w + 1] = m[1] .. " jalan tapi tidak ada kemajuan " .. dur(now - sg.t) .. " (" .. m[3] .. ")"
             end
         end
@@ -18581,7 +18134,6 @@ do (function()
         for i = 1, #w do w[i] = "⚠ " .. w[i] end
         return table.concat(w, "\n")
     end
-    Obs.modules, Obs.warnings = modules, warningText -- v2.3: dipakai status live Discord
 
     local function systemText()
         local W = Refs.World
@@ -19043,6 +18595,8 @@ Session.Cleanup = function()
     pcall(Auto.stopWalk)
     AutoInput.active = false
     pcall(Auto.releaseInput)
+    -- v2.2: item visual dibuang dari tas saat script ditutup
+    pcall(function() if Session.Visual and Session.Visual.clear then Session.Visual.clear() end end)
     for _, c in ipairs(Connections) do pcall(function() c:Disconnect() end) end
     -- kembalikan nama asli (watermark dilepas)
     Misc.CustomName = false
