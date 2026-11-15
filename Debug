@@ -1,4 +1,4 @@
--- SkyP_Debug12.lua : cari fungsi game yang memegang grid tile & tas (lewat upvalue), lalu modul pemiliknya
+-- SkyP_Debug13.lua : telusuri dari loop render/update game (upvalue + isi tabel), catat JALUR ke data world, tas, posisi
 -- Jalankan SAAT SUDAH DI DALAM WORLD (berdiri di world, bukan di layar pilih world).
 -- Hasil tampil di layar dan OTOMATIS disalin ke clipboard.
 
@@ -18,7 +18,7 @@ fr.Size = UDim2.new(0.62, 0, 0.72, 0); fr.Position = UDim2.new(0.19, 0, 0.14, 0)
 fr.BackgroundColor3 = Color3.fromRGB(10, 14, 26); fr.BorderSizePixel = 0; fr.Parent = sg
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -90, 0, 30); title.Position = UDim2.new(0, 8, 0, 2)
-title.BackgroundTransparency = 1; title.Text = "SkyP Debug 12 (upvalue)"
+title.BackgroundTransparency = 1; title.Text = "SkyP Debug 13 (telusur dari loop game)"
 title.TextColor3 = Color3.fromRGB(110, 175, 255); title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.GothamBold; title.TextSize = 16; title.Parent = fr
 local close = Instance.new("TextButton")
@@ -53,9 +53,11 @@ local function good(t) log(t, "#5be08a") end
 
 
 
+
 local getmt = getrawmetatable or getmetatable
 local getup = (debug and debug.getupvalue) or getupvalue
 local getups = (debug and debug.getupvalues) or getupvalues
+local RunService = game:GetService("RunService")
 
 local function ups(f)
     if getups then
@@ -84,10 +86,11 @@ local function rawKeys(t, max)
                 local tv = typeof(v)
                 local s = tostring(k) .. ":" .. (tv == "function" and "f" or tv == "table" and "t" or tv)
                 if tv == "number" or tv == "boolean" then s = s .. "=" .. tostring(v)
-                elseif tv == "string" then s = s .. "=" .. string.sub(v, 1, 18) end
+                elseif tv == "string" then s = s .. "=" .. string.sub(v, 1, 18)
+                elseif tv == "buffer" then s = s .. "(" .. buffer.len(v) .. ")" end
                 list[#list + 1] = s
             end
-            if n > 400 then break end
+            if n > 500 then break end
         end
     end)
     table.sort(list)
@@ -96,123 +99,190 @@ local function rawKeys(t, max)
     return ("(%d kunci, %d angka) "):format(n, nnum) .. table.concat(list, ", ") .. extra
 end
 
-local function upSummary(u)
-    local parts = {}
-    for i, x in pairs(u) do
-        local tx = typeof(x)
-        local s = i .. ":" .. tx
-        if tx == "number" or tx == "boolean" then s = s .. "=" .. tostring(x)
-        elseif tx == "string" then s = s .. "=" .. x:sub(1, 16) end
-        parts[#parts + 1] = s
-    end
-    return table.concat(parts, ", ")
-end
-
+-- grid 2D ketat: kunci angka saja, tiap baris tabel, isi baris pertama angka
 local function gridSize(t)
-    local rows, cols = 0, 0
-    local ok = pcall(function()
+    local rows, cols, nums, bad = 0, 0, 0, false
+    pcall(function()
         for k, row in next, t do
-            if type(k) ~= "number" or type(row) ~= "table" then rows = -999 return end
+            if type(k) ~= "number" or type(row) ~= "table" then bad = true return end
             rows = rows + 1
-            if rows == 1 then for _, x in next, row do cols = cols + 1 if cols > 300 then break end end end
-            if rows > 2000 then break end
+            if rows == 1 then
+                for kk, x in next, row do
+                    cols = cols + 1
+                    if type(kk) == "number" and type(x) == "number" then nums = nums + 1 end
+                    if cols > 400 then break end
+                end
+            end
+            if rows > 3000 then break end
         end
     end)
-    if ok and rows >= 30 and cols >= 30 then return rows, cols end
+    if not bad and rows >= 30 and cols >= 30 and nums >= cols * 0.9 then return rows, cols end
+end
+
+local function flatSize(t)
+    local n, bad = 0, false
+    pcall(function()
+        for k, x in next, t do
+            if type(k) ~= "number" or type(x) ~= "number" then bad = true return end
+            n = n + 1
+            if n > 30000 then break end
+        end
+    end)
+    if not bad and n >= 3000 then return n end
 end
 
 local function main()
-    log("getupvalue=" .. tostring(getup ~= nil) .. " getupvalues=" .. tostring(getups ~= nil)
-        .. " debug.info=" .. tostring(debug and debug.info ~= nil))
-    if not getup and not getups then bad("executor tidak bisa membaca upvalue") return end
-
-    local InvMod
-    for _, mod in ipairs(getloadedmodules()) do
-        local ok, m = pcall(require, mod)
-        if ok and type(m) == "table" then
-            local ok2, yes = pcall(function()
-                return type(m.room) == "function" and type(m.used) == "function" and type(m.count) == "function" and type(m.new) == "function"
-            end)
-            if ok2 and yes then InvMod = m break end
-        end
-    end
-
-    title.Text = "SkyP Debug 12: cari grid & tas..."
-    local gc = getgc(true)
-    log("getgc: " .. #gc .. " objek")
-    local target = {} -- [obj] = label
-    local nGrid = 0
-    for i, v in ipairs(gc) do
-        if i % 2000 == 0 then title.Text = ("SkyP Debug 12: tahap 1 %d%%"):format(math.floor(i / #gc * 100)) task.wait() end
-        if type(v) == "table" then
-            pcall(function()
-                if nGrid < 8 then
-                    local r, c = gridSize(v)
-                    if r then nGrid = nGrid + 1 target[v] = ("GRID%d %dx%d"):format(nGrid, r, c) end
-                end
-                if InvMod then
-                    local mt = getmt(v)
-                    if mt == InvMod or (type(mt) == "table" and rawget(mt, "__index") == InvMod) then target[v] = "TAS" end
-                end
-            end)
-        end
-    end
-    local labels = {}
-    for _, l in pairs(target) do labels[#labels + 1] = l end
-    log("target: " .. table.concat(labels, ", "))
-
-    head("FUNGSI YANG MEMEGANG GRID / TAS")
-    local holders, hcount, perLabel = {}, 0, {}
-    for i, f in ipairs(gc) do
-        if i % 1500 == 0 then title.Text = ("SkyP Debug 12: tahap 2 %d%%"):format(math.floor(i / #gc * 100)) task.wait() end
-        if type(f) == "function" and hcount < 30 then
-            local okC = true
-            if iscclosure then okC = not iscclosure(f) end
-            if okC then
-                local u = ups(f)
-                for idx, x in pairs(u) do
-                    local l = target[x]
-                    if l and (perLabel[l] or 0) < 4 then
-                        perLabel[l] = (perLabel[l] or 0) + 1
-                        hcount = hcount + 1
-                        holders[f] = l
-                        local okN, nm = pcall(debug.info, f, "n")
-                        local okS, src = pcall(debug.info, f, "s")
-                        good(("%s <- fungsi '%s' upvalue #%s | %s"):format(l, tostring(okN and nm or "?"), tostring(idx),
-                            tostring(okS and src or "?"):sub(-50)))
-                        log("   upvalue: " .. upSummary(u))
-                        break
-                    end
-                end
-            end
-        end
-    end
-    if hcount == 0 then bad("tidak ada fungsi yang memegangnya") end
-
-    head("MODUL / TABEL YANG MENYIMPAN FUNGSI ITU")
-    local owners = 0
-    if next(holders) then
-        for i, v in ipairs(gc) do
-            if i % 2000 == 0 then title.Text = ("SkyP Debug 12: tahap 3 %d%%"):format(math.floor(i / #gc * 100)) task.wait() end
-            if type(v) == "table" and owners < 8 then
-                pcall(function()
-                    local n = 0
-                    for k, x in next, v do
-                        n = n + 1
-                        if n > 400 then break end
-                        if holders[x] then
-                            owners = owners + 1
-                            good(("O%d %s disimpan di kunci '%s'"):format(owners, holders[x], tostring(k)))
-                            log("   tabel: " .. rawKeys(v, 70))
-                            break
+    -- titik awal: fungsi yang terhubung ke loop game
+    local roots = {}
+    for _, name in ipairs({ "RenderStepped", "Heartbeat", "Stepped", "PreRender", "PreSimulation", "PostSimulation" }) do
+        local okS, sig = pcall(function() return RunService[name] end)
+        if okS and sig and getconnections then
+            local ok, conns = pcall(getconnections, sig)
+            if ok and type(conns) == "table" then
+                for i, c in ipairs(conns) do
+                    local okf, fn = pcall(function() return c.Function end)
+                    if okf and type(fn) == "function" then
+                        local okS2, src = pcall(debug.info, fn, "s")
+                        src = okS2 and tostring(src) or "?"
+                        local mine = isexecutorclosure and select(2, pcall(isexecutorclosure, fn)) == true
+                        if not mine and not src:find("CoreGui", 1, true) and not src:find("CorePackages", 1, true)
+                            and not src:find("PlayerModule", 1, true) then
+                            roots[#roots + 1] = { fn, name .. "#" .. i }
                         end
                     end
-                end)
+                end
             end
         end
     end
-    if owners == 0 then bad("tidak ada tabel yang menyimpannya") end
-    title.Text = "SkyP Debug 12 (selesai)"
+    log("titik awal (fungsi loop game): " .. #roots)
+    if #roots == 0 then bad("tidak ada fungsi loop game (getconnections?)") return end
+
+    local seen, parentOf, edgeOf = {}, {}, {}
+    local queue, qi = {}, 1
+    for _, r in ipairs(roots) do
+        if not seen[r[1]] then
+            seen[r[1]] = true
+            edgeOf[r[1]] = r[2]
+            queue[#queue + 1] = r[1]
+        end
+    end
+    local function push(x, from, edge)
+        if seen[x] then return end
+        seen[x] = true
+        parentOf[x] = from
+        edgeOf[x] = edge
+        queue[#queue + 1] = x
+    end
+    local function pathOf(x)
+        local parts, cur, n = {}, x, 0
+        while cur ~= nil and n < 14 do
+            table.insert(parts, 1, edgeOf[cur] or "?")
+            cur = parentOf[cur]
+            n = n + 1
+        end
+        return table.concat(parts, " > ")
+    end
+
+    local found = { inv = {}, pos = {}, grid = {}, flat = {}, buf = {}, worldish = {} }
+    local nodes, LIMIT = 0, 60000
+    title.Text = "SkyP Debug 13: menelusuri..."
+    while qi <= #queue and nodes < LIMIT do
+        local x = queue[qi]
+        qi = qi + 1
+        nodes = nodes + 1
+        if nodes % 1500 == 0 then
+            title.Text = ("SkyP Debug 13: %d node"):format(nodes)
+            task.wait()
+        end
+        local tx = type(x)
+        if tx == "function" then
+            local okC = true
+            if iscclosure then okC = not iscclosure(x) end
+            if okC then
+                for i, u in pairs(ups(x)) do
+                    local tu = typeof(u)
+                    if tu == "table" or tu == "function" then push(u, x, "up" .. i)
+                    elseif tu == "buffer" and #found.buf < 6 and buffer.len(u) >= 2000 then
+                        found.buf[#found.buf + 1] = { x, "up" .. i, buffer.len(u) }
+                    end
+                end
+            end
+        elseif tx == "table" then
+            local okD = pcall(function()
+                -- deteksi
+                if type(rawget(x, "slots")) == "table" and rawget(x, "capacity") ~= nil and #found.inv < 4 then
+                    found.inv[#found.inv + 1] = x
+                end
+                if type(rawget(x, "x")) == "number" and type(rawget(x, "y")) == "number" and rawget(x, "facing") ~= nil
+                    and rawget(x, "grounded") ~= nil and #found.pos < 4 then
+                    found.pos[#found.pos + 1] = x
+                end
+                if #found.grid < 6 then
+                    local r, c = gridSize(x)
+                    if r then found.grid[#found.grid + 1] = { x, r, c } return end -- grid: isinya tidak ditelusuri
+                end
+                if #found.flat < 6 then
+                    local n = flatSize(x)
+                    if n then found.flat[#found.flat + 1] = { x, n } return end
+                end
+                -- tabel yang punya angka "lebar/tinggi" world + banyak fungsi
+                local nf, nn = 0, 0
+                local n = 0
+                for k, v in next, x do
+                    n = n + 1
+                    if n > 600 then break end
+                    local tv = typeof(v)
+                    if tv == "function" then nf = nf + 1 end
+                    if type(k) == "string" and tv == "number" and v >= 30 and v <= 2000 and v == math.floor(v) then nn = nn + 1 end
+                    if tv == "table" or tv == "function" then push(v, x, "." .. tostring(k)) end
+                    if tv == "buffer" and #found.buf < 6 and buffer.len(v) >= 2000 then
+                        found.buf[#found.buf + 1] = { x, "." .. tostring(k), buffer.len(v) }
+                    end
+                end
+                if nf >= 25 and #found.worldish < 6 then found.worldish[#found.worldish + 1] = { x, nf } end
+            end)
+        end
+    end
+    title.Text = "SkyP Debug 13 (selesai)"
+    log(("node ditelusuri: %d (antrian %d)"):format(nodes, #queue))
+
+    local function show(label, list, fmt)
+        head(label .. " (" .. #list .. ")")
+        if #list == 0 then bad("tidak ketemu") end
+        for i, it in ipairs(list) do fmt(i, it) end
+    end
+    show("TAS", found.inv, function(i, t)
+        good(("T%d jalur: %s"):format(i, pathOf(t)))
+        log("   isi: " .. rawKeys(t, 20))
+        local p = parentOf[t]
+        if type(p) == "table" then log("   induk: " .. rawKeys(p, 50)) end
+    end)
+    show("POSISI (tabel hidup x/y/facing/grounded)", found.pos, function(i, t)
+        good(("P%d jalur: %s"):format(i, pathOf(t)))
+        local p = parentOf[t]
+        if type(p) == "table" then log("   induk: " .. rawKeys(p, 50)) end
+    end)
+    show("GRID 2D", found.grid, function(i, g)
+        good(("G%d %dx%d jalur: %s"):format(i, g[2], g[3], pathOf(g[1])))
+        local p = parentOf[g[1]]
+        if type(p) == "table" then log("   induk: " .. rawKeys(p, 60))
+        elseif type(p) == "function" then
+            local okN, nm = pcall(debug.info, p, "n")
+            log("   dipegang fungsi '" .. tostring(okN and nm or "?") .. "'")
+        end
+    end)
+    show("ARRAY DATAR", found.flat, function(i, f)
+        good(("F%d n=%d jalur: %s"):format(i, f[2], pathOf(f[1])))
+        local p = parentOf[f[1]]
+        if type(p) == "table" then log("   induk: " .. rawKeys(p, 60)) end
+    end)
+    show("BUFFER BESAR", found.buf, function(i, b)
+        good(("B%d %d byte di %s, jalur pemilik: %s"):format(i, b[3], b[2], pathOf(b[1])))
+    end)
+    show("TABEL BANYAK FUNGSI (calon modul World)", found.worldish, function(i, w)
+        good(("M%d %d fungsi, jalur: %s"):format(i, w[2], pathOf(w[1])))
+        log("   isi: " .. rawKeys(w[1], 80))
+    end)
 end
 
 local s, e = pcall(main)
