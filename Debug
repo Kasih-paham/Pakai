@@ -1,5 +1,6 @@
--- SkyP_Debug7.lua : apakah game sekarang jalan di Actor (VM terpisah)?
--- Jalankan SAAT SUDAH DI DALAM WORLD. Hasil tampil di layar dan OTOMATIS disalin ke clipboard.
+-- SkyP_Debug8.lua : cari data world / tas / posisi BERDASARKAN BENTUK (nama kunci tidak dipakai)
+-- Jalankan SAAT SUDAH DI DALAM WORLD (berdiri di world, bukan di layar pilih world).
+-- Hasil tampil di layar dan OTOMATIS disalin ke clipboard.
 
 local Players = game:GetService("Players")
 local lp = Players.LocalPlayer
@@ -17,7 +18,7 @@ fr.Size = UDim2.new(0.62, 0, 0.72, 0); fr.Position = UDim2.new(0.19, 0, 0.14, 0)
 fr.BackgroundColor3 = Color3.fromRGB(10, 14, 26); fr.BorderSizePixel = 0; fr.Parent = sg
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -90, 0, 30); title.Position = UDim2.new(0, 8, 0, 2)
-title.BackgroundTransparency = 1; title.Text = "SkyP Debug 7 (Actor / VM)"
+title.BackgroundTransparency = 1; title.Text = "SkyP Debug 8 (cari lewat bentuk data)"
 title.TextColor3 = Color3.fromRGB(110, 175, 255); title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.GothamBold; title.TextSize = 16; title.Parent = fr
 local close = Instance.new("TextButton")
@@ -48,173 +49,223 @@ local function head(t) log("== " .. t .. " ==", "#6eafff") end
 local function bad(t) log(t, "#ff6b6b") end
 local function good(t) log(t, "#5be08a") end
 
--- kode yang dijalankan DI DALAM tiap Actor: cari data world / tas / posisi, tulis hasil ke file
-local ACTOR_CODE = [==[
-local out = {}
-local function add(x) out[#out + 1] = tostring(x) end
+local getmt = getrawmetatable or getmetatable
+local isBuffer = function(v) return typeof(v) == "buffer" end
+
+-- kunci tabel (raw), urut, dengan tipe & nilai pendek
 local function keysOf(t, max)
-    local list = {}
+    max = max or 45
+    local list, n, nnum = {}, 0, 0
     pcall(function()
         for k, v in next, t do
-            if type(k) == "string" then list[#list + 1] = k .. ":" .. type(v):sub(1, 1) end
+            n = n + 1
+            if type(k) == "number" then
+                nnum = nnum + 1
+            else
+                local tv = typeof(v)
+                local s = tostring(k) .. ":" .. (tv == "function" and "f" or tv == "table" and "t" or tv)
+                if tv == "number" or tv == "boolean" then s = s .. "=" .. tostring(v)
+                elseif tv == "string" then s = s .. "=" .. string.sub(v, 1, 20)
+                elseif tv == "buffer" then s = s .. "(" .. buffer.len(v) .. ")" end
+                list[#list + 1] = s
+            end
         end
     end)
     table.sort(list)
-    while #list > (max or 40) do table.remove(list) end
-    return table.concat(list, ", ")
+    local extra = #list > max and (" ...+" .. (#list - max)) or ""
+    while #list > max do table.remove(list) end
+    return ("(%d kunci, %d angka) "):format(n, nnum) .. table.concat(list, ", ") .. extra
 end
-local ok, err = pcall(function()
-    add("getgc=" .. tostring(getgc ~= nil))
-    if not getgc then return end
-    local gc = getgc(true)
-    add("objek=" .. #gc)
-    local nW, nInv, nState, nOther = 0, 0, 0, 0
-    for i, v in ipairs(gc) do
-        if type(v) == "table" then
-            pcall(function()
-                if type(rawget(v, "fg")) == "table" and type(rawget(v, "w")) == "number" and rawget(v, "spawn") ~= nil then
-                    nW = nW + 1
-                    if nW <= 2 then add("WORLD: " .. keysOf(v, 60)) end
+
+local function mtInfo(v)
+    local ok, mt = pcall(getmt, v)
+    if not ok or type(mt) ~= "table" then return "" end
+    local idx = rawget(mt, "__index")
+    return " | metatable: __index=" .. typeof(idx) .. (rawget(mt, "__newindex") and ", __newindex" or "")
+        .. (type(idx) == "table" and (" -> " .. keysOf(idx, 20)) or "")
+end
+
+-- grid 2D: >= 30 baris (tabel) yang isinya >= 30 angka
+local function gridInfo(t)
+    local rows, cols, nums = 0, 0, 0
+    local ok = pcall(function()
+        for k, row in next, t do
+            if type(k) ~= "number" or type(row) ~= "table" then return end
+            rows = rows + 1
+            if rows == 1 then
+                for _, x in next, row do
+                    cols = cols + 1
+                    if type(x) == "number" then nums = nums + 1 end
+                    if cols > 300 then break end
                 end
-                if type(rawget(v, "slots")) == "table" and type(v.count) == "function" then
-                    nInv = nInv + 1
-                    if nInv <= 2 then add("TAS: " .. keysOf(v, 30)) end
-                end
-                if type(rawget(v, "state")) == "function" then
-                    nState = nState + 1
-                    if nState <= 2 then
-                        local okS, s = pcall(rawget(v, "state"))
-                        add("STATE: " .. (okS and type(s) == "table" and keysOf(s, 25) or tostring(s)))
-                    end
-                end
-                if type(rawget(v, "playerAt")) == "function" then nOther = nOther + 1 end
-            end)
+            end
+            if rows > 2000 then break end
         end
-    end
-    add(("ringkas: world=%d tas=%d state=%d pemain=%d"):format(nW, nInv, nState, nOther))
-end)
-if not ok then add("ERROR " .. tostring(err)) end
-pcall(writefile, "SKYP_FILE", table.concat(out, "\n"))
-]==]
+    end)
+    if ok and rows >= 30 and cols >= 30 and nums >= cols * 0.8 then return rows, cols end
+    return nil
+end
+
+-- array datar angka besar (w*h)
+local function flatInfo(t)
+    local n = 0
+    local ok = pcall(function()
+        for k, v in next, t do
+            if type(k) ~= "number" or type(v) ~= "number" then n = -1 return end
+            n = n + 1
+            if n > 20000 then break end
+        end
+    end)
+    if ok and n >= 3000 then return n end
+    return nil
+end
 
 local function main()
-    head("FUNGSI EXECUTOR")
-    local fns = { "getactors", "run_on_actor", "getactorthreads", "run_on_thread", "create_comm_channel",
-        "getgc", "getloadedmodules", "getscripts", "getrunningscripts", "writefile", "readfile", "isfile", "delfile",
-        "identifyexecutor" }
-    for _, n in ipairs(fns) do
-        local f = getgenv and getgenv()[n]
-        if f == nil then f = rawget(_G, n) end
-        if f == nil then pcall(function() f = getfenv(0)[n] end) end
-        log(n .. " = " .. tostring(f ~= nil))
-    end
-    if identifyexecutor then
-        local ok, a, b = pcall(identifyexecutor)
-        if ok then log("executor: " .. tostring(a) .. " " .. tostring(b or "")) end
-    end
-
-    head("ACTOR DI GAME")
-    local actors = {}
-    for _, root in ipairs({ game:GetService("Players"), game:GetService("ReplicatedFirst"),
-        game:GetService("ReplicatedStorage"), game:GetService("StarterPlayer"), workspace }) do
-        pcall(function()
-            for _, d in ipairs(root:GetDescendants()) do
-                if d:IsA("Actor") then actors[#actors + 1] = d end
+    -- modul inventori
+    local InvMod
+    if getloadedmodules then
+        for _, mod in ipairs(getloadedmodules()) do
+            local ok, m = pcall(require, mod)
+            if ok and type(m) == "table" then
+                local ok2, yes = pcall(function()
+                    return type(m.room) == "function" and type(m.used) == "function" and type(m.count) == "function" and type(m.new) == "function"
+                end)
+                if ok2 and yes then InvMod = m break end
             end
-        end)
+        end
     end
-    log("Actor ditemukan: " .. #actors)
-    for i, a in ipairs(actors) do
-        if i > 15 then log("...") break end
-        local scripts = {}
-        pcall(function()
-            for _, d in ipairs(a:GetDescendants()) do
-                if d:IsA("LocalScript") or (d:IsA("Script") and d.RunContext == Enum.RunContext.Client) then
-                    scripts[#scripts + 1] = d.Name
+    log("modul inventori: " .. (InvMod and "ada" or "TIDAK ADA"))
+
+    local okG, gc = pcall(getgc, true)
+    if not okG or type(gc) ~= "table" then bad("getgc gagal") return end
+    log("getgc: " .. #gc .. " objek")
+
+    local grids, flats, bufs, invInst, posTabs, proxied = {}, {}, {}, {}, {}, 0
+    local mtIdx = {} -- metatable.__index berbeda yang sering dipakai
+    for i, v in ipairs(gc) do
+        if i % 3000 == 0 then task.wait() end
+        if type(v) == "table" then
+            -- tas
+            if InvMod then
+                local ok, mt = pcall(getmt, v)
+                if ok and mt ~= nil and (mt == InvMod or (type(mt) == "table" and rawget(mt, "__index") == InvMod)) then
+                    if #invInst < 3 then invInst[#invInst + 1] = v end
                 end
             end
-        end)
-        log(("  %s | %d script: %s"):format(a:GetFullName(), #scripts, table.concat(scripts, ", ", 1, math.min(#scripts, 6))))
-    end
-    if getactors then
-        local ok, list = pcall(getactors)
-        log("getactors() = " .. (ok and type(list) == "table" and (#list .. " actor") or tostring(list)))
+            -- proxy (metatable dengan __index tabel)
+            local okM, mt = pcall(getmt, v)
+            if okM and type(mt) == "table" and type(rawget(mt, "__index")) == "table" and rawget(mt, "__index") ~= mt then
+                proxied = proxied + 1
+            end
+            -- grid / array datar
+            if #grids < 6 then
+                local r, c = gridInfo(v)
+                if r then grids[#grids + 1] = { v, r, c } end
+            end
+            if #flats < 6 then
+                local n = flatInfo(v)
+                if n then flats[#flats + 1] = { v, n } end
+            end
+            -- posisi: tabel dengan x, y angka + facing / vx
+            pcall(function()
+                if #posTabs < 6 and type(rawget(v, "x")) == "number" and type(rawget(v, "y")) == "number"
+                    and (rawget(v, "facing") ~= nil or rawget(v, "vx") ~= nil or rawget(v, "grounded") ~= nil) then
+                    posTabs[#posTabs + 1] = v
+                end
+            end)
+            -- buffer besar di dalam tabel
+            if #bufs < 8 then
+                pcall(function()
+                    local n = 0
+                    for k, x in next, v do
+                        n = n + 1
+                        if n > 80 then break end
+                        if isBuffer(x) and buffer.len(x) >= 2000 then
+                            bufs[#bufs + 1] = { v, k, buffer.len(x) }
+                            break
+                        end
+                    end
+                end)
+            end
+        end
     end
 
-    head("LOCALSCRIPT YANG JALAN")
-    if getscripts or getrunningscripts then
-        local ok, list = pcall(getrunningscripts or getscripts)
-        if ok and type(list) == "table" then
-            local n, shown = 0, 0
-            for _, s in ipairs(list) do
-                local okp, p = pcall(function() return s:GetFullName() end)
-                if okp and (s:IsA("LocalScript") or s:IsA("Script")) and not p:find("CoreGui", 1, true)
-                    and not p:find("PlayerModule", 1, true) and not p:find("RbxCharacterSounds", 1, true) then
-                    n = n + 1
-                    if shown < 15 then
-                        shown = shown + 1
-                        local actor = s:FindFirstAncestorWhichIsA("Actor")
-                        log("  " .. p .. (actor and "  [DI ACTOR]" or ""))
+    head("TAS (instance modul inventori)")
+    log("ditemukan: " .. #invInst)
+    for i, v in ipairs(invInst) do log(("I%d %s"):format(i, keysOf(v, 30))) end
+
+    head("POSISI (x, y + facing/vx/grounded)")
+    log("ditemukan: " .. #posTabs)
+    for i, v in ipairs(posTabs) do log(("P%d %s"):format(i, keysOf(v, 30))) end
+
+    head("GRID TILE 2D")
+    log("ditemukan: " .. #grids)
+    head("ARRAY DATAR (>= 3000 angka)")
+    for i, f in ipairs(flats) do log(("F%d n=%d"):format(i, f[2])) end
+    head("BUFFER BESAR")
+    for i, b in ipairs(bufs) do log(("B%d kunci %s, %d byte | pemilik %s"):format(i, tostring(b[2]), b[3], keysOf(b[1], 40))) end
+    log("tabel ber-proxy (metatable __index tabel): " .. proxied)
+
+    -- siapa yang memegang grid / array datar (pemilik = calon data world)
+    head("PEMILIK GRID / ARRAY (calon data world)")
+    local want = {}
+    for _, g in ipairs(grids) do want[g[1]] = ("grid %dx%d"):format(g[2], g[3]) end
+    for _, f in ipairs(flats) do want[f[1]] = ("datar n=%d"):format(f[2]) end
+    if next(want) == nil then bad("tidak ada grid / array untuk dicari pemiliknya") end
+    local found = 0
+    if next(want) then
+        for i, v in ipairs(gc) do
+            if i % 3000 == 0 then task.wait() end
+            if type(v) == "table" and found < 8 then
+                pcall(function()
+                    local n = 0
+                    for k, x in next, v do
+                        n = n + 1
+                        if n > 120 then break end
+                        if want[x] then
+                            found = found + 1
+                            good(("W%d kunci '%s' -> %s"):format(found, tostring(k), want[x]))
+                            log("   pemilik: " .. keysOf(v, 60) .. mtInfo(v))
+                            break
+                        end
+                    end
+                end)
+            end
+        end
+    end
+    if found == 0 and next(want) then bad("pemilik tidak ketemu (dipegang upvalue fungsi saja?)") end
+
+    -- grid juga bisa dipegang langsung oleh upvalue fungsi
+    head("UPVALUE YANG MEMEGANG GRID / BUFFER")
+    local gu = debug and (debug.getupvalues or debug.getupvalue)
+    if gu and next(want) then
+        local hits = 0
+        for i, f in ipairs(gc) do
+            if i % 3000 == 0 then task.wait() end
+            if type(f) == "function" and hits < 6 then
+                local ok, ups = pcall(debug.getupvalues or function() return {} end, f)
+                if ok and type(ups) == "table" then
+                    for idx, u in pairs(ups) do
+                        if want[u] then
+                            hits = hits + 1
+                            local okS, src = pcall(debug.info, f, "s")
+                            local okN, nm = pcall(debug.info, f, "n")
+                            good(("U%d upvalue #%s = %s | fungsi '%s' di %s"):format(hits, tostring(idx), want[u],
+                                tostring(okN and nm or "?"), tostring(okS and src or "?")))
+                            -- upvalue lain di fungsi itu (bisa w, h, data world lain)
+                            local parts = {}
+                            for j, x in pairs(ups) do
+                                local tx = typeof(x)
+                                parts[#parts + 1] = j .. ":" .. tx .. ((tx == "number" or tx == "string" or tx == "boolean") and ("=" .. tostring(x):sub(1, 16)) or "")
+                            end
+                            log("   upvalue lain: " .. table.concat(parts, ", "))
+                            break
+                        end
                     end
                 end
             end
-            log("total: " .. n)
         end
-    end
-
-    -- sumber fungsi yang terlihat dari VM ini (kalau script game tidak muncul = game di VM lain)
-    head("SUMBER FUNGSI DI VM INI (getgc)")
-    if getgc and debug and debug.info then
-        local count, okG, gc = {}, pcall(getgc, false)
-        if okG then
-            for i, f in ipairs(gc) do
-                if i % 4000 == 0 then task.wait() end
-                if type(f) == "function" then
-                    local ok, src = pcall(debug.info, f, "s")
-                    if ok and type(src) == "string" and not src:find("CoreGui", 1, true) and not src:find("CorePackages", 1, true) then
-                        src = src:sub(1, 60)
-                        count[src] = (count[src] or 0) + 1
-                    end
-                end
-            end
-            local list = {}
-            for k, v in pairs(count) do list[#list + 1] = { k, v } end
-            table.sort(list, function(a, b) return a[2] > b[2] end)
-            for i = 1, math.min(20, #list) do log(("  %5d  %s"):format(list[i][2], list[i][1])) end
-        end
-    end
-
-    -- jalankan pemindai di dalam tiap Actor
-    head("PINDAI DI DALAM ACTOR")
-    local runOn = run_on_actor or (syn and syn.run_on_actor)
-    if not runOn then bad("executor tidak punya run_on_actor") return end
-    if not (writefile and readfile and isfile) then bad("executor tidak bisa tulis/baca file") return end
-    local targets = actors
-    if getactors then
-        local ok, list = pcall(getactors)
-        if ok and type(list) == "table" and #list > 0 then targets = list end
-    end
-    if #targets == 0 then bad("tidak ada Actor untuk dipindai") return end
-    for i, a in ipairs(targets) do
-        if i > 8 then break end
-        local fname = "skyp_actor_" .. i .. ".txt"
-        pcall(function() if isfile(fname) and delfile then delfile(fname) end end)
-        local ok, err = pcall(runOn, a, (ACTOR_CODE:gsub("SKYP_FILE", fname)))
-        local name = "?"
-        pcall(function() name = a:GetFullName() end)
-        if not ok then
-            bad("  A" .. i .. " " .. name .. ": run_on_actor gagal: " .. tostring(err))
-        else
-            local t0 = os.clock()
-            while os.clock() - t0 < 15 and not (pcall(isfile, fname) and isfile(fname)) do task.wait(0.5) end
-            local okR, txt = pcall(readfile, fname)
-            if okR and txt then
-                good("  A" .. i .. " " .. name .. ":")
-                for line in txt:gmatch("[^\n]+") do log("     " .. line) end
-            else
-                bad("  A" .. i .. " " .. name .. ": tidak ada hasil (15 dtk)")
-            end
-        end
+        if hits == 0 then bad("tidak ada upvalue yang memegangnya") end
     end
 end
 
