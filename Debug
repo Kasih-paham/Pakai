@@ -1,4 +1,4 @@
--- SkyP_Debug8.lua : cari data world / tas / posisi BERDASARKAN BENTUK (nama kunci tidak dipakai)
+-- SkyP_Debug9.lua : cek aturan pemindai SkyP (findRefs) satu per satu
 -- Jalankan SAAT SUDAH DI DALAM WORLD (berdiri di world, bukan di layar pilih world).
 -- Hasil tampil di layar dan OTOMATIS disalin ke clipboard.
 
@@ -18,7 +18,7 @@ fr.Size = UDim2.new(0.62, 0, 0.72, 0); fr.Position = UDim2.new(0.19, 0, 0.14, 0)
 fr.BackgroundColor3 = Color3.fromRGB(10, 14, 26); fr.BorderSizePixel = 0; fr.Parent = sg
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -90, 0, 30); title.Position = UDim2.new(0, 8, 0, 2)
-title.BackgroundTransparency = 1; title.Text = "SkyP Debug 8 (cari lewat bentuk data)"
+title.BackgroundTransparency = 1; title.Text = "SkyP Debug 9 (cek pemindai SkyP)"
 title.TextColor3 = Color3.fromRGB(110, 175, 255); title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.GothamBold; title.TextSize = 16; title.Parent = fr
 local close = Instance.new("TextButton")
@@ -49,24 +49,21 @@ local function head(t) log("== " .. t .. " ==", "#6eafff") end
 local function bad(t) log(t, "#ff6b6b") end
 local function good(t) log(t, "#5be08a") end
 
-local getmt = getrawmetatable or getmetatable
-local isBuffer = function(v) return typeof(v) == "buffer" end
 
--- kunci tabel (raw), urut, dengan tipe & nilai pendek
+local getmt = getrawmetatable or getmetatable
+
 local function keysOf(t, max)
-    max = max or 45
+    max = max or 60
     local list, n, nnum = {}, 0, 0
     pcall(function()
         for k, v in next, t do
             n = n + 1
-            if type(k) == "number" then
-                nnum = nnum + 1
+            if type(k) == "number" then nnum = nnum + 1
             else
                 local tv = typeof(v)
                 local s = tostring(k) .. ":" .. (tv == "function" and "f" or tv == "table" and "t" or tv)
                 if tv == "number" or tv == "boolean" then s = s .. "=" .. tostring(v)
-                elseif tv == "string" then s = s .. "=" .. string.sub(v, 1, 20)
-                elseif tv == "buffer" then s = s .. "(" .. buffer.len(v) .. ")" end
+                elseif tv == "string" then s = s .. "=" .. string.sub(v, 1, 20) end
                 list[#list + 1] = s
             end
         end
@@ -77,196 +74,104 @@ local function keysOf(t, max)
     return ("(%d kunci, %d angka) "):format(n, nnum) .. table.concat(list, ", ") .. extra
 end
 
-local function mtInfo(v)
-    local ok, mt = pcall(getmt, v)
-    if not ok or type(mt) ~= "table" then return "" end
-    local idx = rawget(mt, "__index")
-    return " | metatable: __index=" .. typeof(idx) .. (rawget(mt, "__newindex") and ", __newindex" or "")
-        .. (type(idx) == "table" and (" -> " .. keysOf(idx, 20)) or "")
-end
-
--- grid 2D: >= 30 baris (tabel) yang isinya >= 30 angka
-local function gridInfo(t)
-    local rows, cols, nums = 0, 0, 0
-    local ok = pcall(function()
+local function isGrid(t)
+    local rows, cols = 0, 0
+    pcall(function()
         for k, row in next, t do
-            if type(k) ~= "number" or type(row) ~= "table" then return end
+            if type(k) ~= "number" or type(row) ~= "table" then rows = -999 return end
             rows = rows + 1
-            if rows == 1 then
-                for _, x in next, row do
-                    cols = cols + 1
-                    if type(x) == "number" then nums = nums + 1 end
-                    if cols > 300 then break end
-                end
-            end
+            if rows == 1 then for _ in next, row do cols = cols + 1 if cols > 300 then break end end end
             if rows > 2000 then break end
         end
     end)
-    if ok and rows >= 30 and cols >= 30 and nums >= cols * 0.8 then return rows, cols end
-    return nil
-end
-
--- array datar angka besar (w*h)
-local function flatInfo(t)
-    local n = 0
-    local ok = pcall(function()
-        for k, v in next, t do
-            if type(k) ~= "number" or type(v) ~= "number" then n = -1 return end
-            n = n + 1
-            if n > 20000 then break end
-        end
-    end)
-    if ok and n >= 3000 then return n end
-    return nil
+    return rows >= 30 and cols >= 30
 end
 
 local function main()
-    -- modul inventori
     local InvMod
-    if getloadedmodules then
-        for _, mod in ipairs(getloadedmodules()) do
-            local ok, m = pcall(require, mod)
-            if ok and type(m) == "table" then
-                local ok2, yes = pcall(function()
-                    return type(m.room) == "function" and type(m.used) == "function" and type(m.count) == "function" and type(m.new) == "function"
-                end)
-                if ok2 and yes then InvMod = m break end
-            end
+    for _, mod in ipairs(getloadedmodules()) do
+        local ok, m = pcall(require, mod)
+        if ok and type(m) == "table" then
+            local ok2, yes = pcall(function()
+                return type(m.room) == "function" and type(m.used) == "function" and type(m.count) == "function" and type(m.new) == "function"
+            end)
+            if ok2 and yes then InvMod = m break end
         end
     end
-    log("modul inventori: " .. (InvMod and "ada" or "TIDAK ADA"))
 
-    local okG, gc = pcall(getgc, true)
-    if not okG or type(gc) ~= "table" then bad("getgc gagal") return end
+    local gc = getgc(true)
     log("getgc: " .. #gc .. " objek")
-
-    local grids, flats, bufs, invInst, posTabs, proxied = {}, {}, {}, {}, {}, 0
-    local mtIdx = {} -- metatable.__index berbeda yang sering dipakai
+    local C = { world = 0, worldNear = {}, inv = 0, state = 0, menu = 0, gems = 0, hud = 0, others = 0, gridOwner = {} }
+    local grids = {}
     for i, v in ipairs(gc) do
         if i % 3000 == 0 then task.wait() end
         if type(v) == "table" then
-            -- tas
-            if InvMod then
-                local ok, mt = pcall(getmt, v)
-                if ok and mt ~= nil and (mt == InvMod or (type(mt) == "table" and rawget(mt, "__index") == InvMod)) then
-                    if #invInst < 3 then invInst[#invInst + 1] = v end
-                end
-            end
-            -- proxy (metatable dengan __index tabel)
-            local okM, mt = pcall(getmt, v)
-            if okM and type(mt) == "table" and type(rawget(mt, "__index")) == "table" and rawget(mt, "__index") ~= mt then
-                proxied = proxied + 1
-            end
-            -- grid / array datar
-            if #grids < 6 then
-                local r, c = gridInfo(v)
-                if r then grids[#grids + 1] = { v, r, c } end
-            end
-            if #flats < 6 then
-                local n = flatInfo(v)
-                if n then flats[#flats + 1] = { v, n } end
-            end
-            -- posisi: tabel dengan x, y angka + facing / vx
             pcall(function()
-                if #posTabs < 6 and type(rawget(v, "x")) == "number" and type(rawget(v, "y")) == "number"
-                    and (rawget(v, "facing") ~= nil or rawget(v, "vx") ~= nil or rawget(v, "grounded") ~= nil) then
-                    posTabs[#posTabs + 1] = v
+                local fg, bg = rawget(v, "fg"), rawget(v, "bg")
+                local w, h, sp = rawget(v, "w"), rawget(v, "h"), rawget(v, "spawn")
+                local score = (type(fg) == "table" and 1 or 0) + (type(bg) == "table" and 1 or 0)
+                    + (type(w) == "number" and 1 or 0) + (type(h) == "number" and 1 or 0) + (sp ~= nil and 1 or 0)
+                if score == 5 then
+                    C.world = C.world + 1
+                    if C.world == 1 then C.worldTab = v end
+                elseif score >= 2 and #C.worldNear < 4 then
+                    C.worldNear[#C.worldNear + 1] = ("fg=%s bg=%s w=%s h=%s spawn=%s"):format(type(fg), type(bg), type(w), type(h), typeof(sp))
+                end
+                if InvMod and getmt(v) == InvMod and type(rawget(v, "slots")) == "table" and rawget(v, "capacity") ~= nil then C.inv = C.inv + 1 end
+                local st = rawget(v, "state")
+                if type(st) == "function" then
+                    local ok, s = pcall(st)
+                    if ok and type(s) == "table" and type(s.x) == "number" and s.facing ~= nil and s.vx ~= nil then C.state = C.state + 1 end
+                end
+                if type(rawget(v, "openBackpack")) == "function" and type(rawget(v, "ui")) == "table" then C.menu = C.menu + 1 end
+                if type(rawget(v, "addGems")) == "function" then C.gems = C.gems + 1 end
+                if type(rawget(v, "punchRange")) == "function" and type(rawget(v, "handPower")) == "function" then C.hud = C.hud + 1 end
+                if type(rawget(v, "list")) == "function" and type(rawget(v, "where")) == "function" and type(rawget(v, "playerAt")) == "function" then C.others = C.others + 1 end
+                if #grids < 6 and isGrid(v) then grids[#grids + 1] = v end
+            end)
+        end
+    end
+
+    head("ATURAN PEMINDAI SKYP (findRefs)")
+    local function row(name, n) if n > 0 then good(name .. ": OK (" .. n .. ")") else bad(name .. ": TIDAK") end end
+    row("World (fg, bg, w, h, spawn)", C.world)
+    for _, s in ipairs(C.worldNear) do log("   hampir cocok: " .. s) end
+    row("Inventori (metatable modul + slots + capacity)", C.inv)
+    row("Posisi (state() -> x, facing, vx)", C.state)
+    row("Menu (openBackpack + ui)", C.menu)
+    row("Gems (addGems)", C.gems)
+    row("Hud (punchRange + handPower)", C.hud)
+    row("Pemain lain (list + where + playerAt)", C.others)
+
+    if C.worldTab then
+        head("ISI DATA WORLD")
+        local w = C.worldTab
+        log("nama: " .. tostring(rawget(w, "name")) .. " | ukuran " .. tostring(rawget(w, "w")) .. "x" .. tostring(rawget(w, "h")))
+        for _, k in ipairs({ "takeDrop", "dropList", "dropTaken", "spliceSeed", "tileChanged", "vendCall", "call", "enter", "jammerOn", "raymanOn", "builderOk", "areas", "vends", "vendOwner" }) do
+            log(("  %s = %s"):format(k, typeof(rawget(w, k))))
+        end
+    end
+
+    -- pemilik grid: semua kunci diperiksa
+    head("PEMILIK GRID (semua kunci)")
+    local want = {}
+    for i, g in ipairs(grids) do want[g] = i end
+    local hits = 0
+    for i, v in ipairs(gc) do
+        if i % 3000 == 0 then task.wait() end
+        if type(v) == "table" and hits < 8 and not want[v] then
+            pcall(function()
+                for k, x in next, v do
+                    if want[x] then
+                        hits = hits + 1
+                        good(("G%d dipegang kunci '%s' oleh: %s"):format(want[x], tostring(k), keysOf(v, 30)))
+                        break
+                    end
                 end
             end)
-            -- buffer besar di dalam tabel
-            if #bufs < 8 then
-                pcall(function()
-                    local n = 0
-                    for k, x in next, v do
-                        n = n + 1
-                        if n > 80 then break end
-                        if isBuffer(x) and buffer.len(x) >= 2000 then
-                            bufs[#bufs + 1] = { v, k, buffer.len(x) }
-                            break
-                        end
-                    end
-                end)
-            end
         end
     end
-
-    head("TAS (instance modul inventori)")
-    log("ditemukan: " .. #invInst)
-    for i, v in ipairs(invInst) do log(("I%d %s"):format(i, keysOf(v, 30))) end
-
-    head("POSISI (x, y + facing/vx/grounded)")
-    log("ditemukan: " .. #posTabs)
-    for i, v in ipairs(posTabs) do log(("P%d %s"):format(i, keysOf(v, 30))) end
-
-    head("GRID TILE 2D")
-    log("ditemukan: " .. #grids)
-    head("ARRAY DATAR (>= 3000 angka)")
-    for i, f in ipairs(flats) do log(("F%d n=%d"):format(i, f[2])) end
-    head("BUFFER BESAR")
-    for i, b in ipairs(bufs) do log(("B%d kunci %s, %d byte | pemilik %s"):format(i, tostring(b[2]), b[3], keysOf(b[1], 40))) end
-    log("tabel ber-proxy (metatable __index tabel): " .. proxied)
-
-    -- siapa yang memegang grid / array datar (pemilik = calon data world)
-    head("PEMILIK GRID / ARRAY (calon data world)")
-    local want = {}
-    for _, g in ipairs(grids) do want[g[1]] = ("grid %dx%d"):format(g[2], g[3]) end
-    for _, f in ipairs(flats) do want[f[1]] = ("datar n=%d"):format(f[2]) end
-    if next(want) == nil then bad("tidak ada grid / array untuk dicari pemiliknya") end
-    local found = 0
-    if next(want) then
-        for i, v in ipairs(gc) do
-            if i % 3000 == 0 then task.wait() end
-            if type(v) == "table" and found < 8 then
-                pcall(function()
-                    local n = 0
-                    for k, x in next, v do
-                        n = n + 1
-                        if n > 120 then break end
-                        if want[x] then
-                            found = found + 1
-                            good(("W%d kunci '%s' -> %s"):format(found, tostring(k), want[x]))
-                            log("   pemilik: " .. keysOf(v, 60) .. mtInfo(v))
-                            break
-                        end
-                    end
-                end)
-            end
-        end
-    end
-    if found == 0 and next(want) then bad("pemilik tidak ketemu (dipegang upvalue fungsi saja?)") end
-
-    -- grid juga bisa dipegang langsung oleh upvalue fungsi
-    head("UPVALUE YANG MEMEGANG GRID / BUFFER")
-    local gu = debug and (debug.getupvalues or debug.getupvalue)
-    if gu and next(want) then
-        local hits = 0
-        for i, f in ipairs(gc) do
-            if i % 3000 == 0 then task.wait() end
-            if type(f) == "function" and hits < 6 then
-                local ok, ups = pcall(debug.getupvalues or function() return {} end, f)
-                if ok and type(ups) == "table" then
-                    for idx, u in pairs(ups) do
-                        if want[u] then
-                            hits = hits + 1
-                            local okS, src = pcall(debug.info, f, "s")
-                            local okN, nm = pcall(debug.info, f, "n")
-                            good(("U%d upvalue #%s = %s | fungsi '%s' di %s"):format(hits, tostring(idx), want[u],
-                                tostring(okN and nm or "?"), tostring(okS and src or "?")))
-                            -- upvalue lain di fungsi itu (bisa w, h, data world lain)
-                            local parts = {}
-                            for j, x in pairs(ups) do
-                                local tx = typeof(x)
-                                parts[#parts + 1] = j .. ":" .. tx .. ((tx == "number" or tx == "string" or tx == "boolean") and ("=" .. tostring(x):sub(1, 16)) or "")
-                            end
-                            log("   upvalue lain: " .. table.concat(parts, ", "))
-                            break
-                        end
-                    end
-                end
-            end
-        end
-        if hits == 0 then bad("tidak ada upvalue yang memegangnya") end
-    end
+    if hits == 0 then bad("pemilik grid tidak ketemu") end
 end
 
 local s, e = pcall(main)
