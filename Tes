@@ -46,7 +46,7 @@ end
 --   "off"  = server belum punya rute /hb (pengecekan belum dipasang): script jalan seperti biasa
 -- Tidak ada rahasia di sini. Menu Admin hanya muncul untuk key yang ditandai admin di server,
 -- dan tiap aksi admin tetap dicek server memakai ADMIN_KEY yang diketik sendiri.
-Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.6", Admin = false, Fails = 0, Off = false }
+Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.7", Admin = false, Fails = 0, Off = false }
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -2479,6 +2479,11 @@ local function findRefs()
         if Refs.World and Refs.Inv and Refs.SetTile and Refs.State and Refs.Punch
             and Refs.Menu and Refs.Gems and Refs.Hud and Refs.Others then break end
     end
+    -- v2.7: getgc di sebagian executor (Delta) tidak mengembalikan tabel game: telusuri dari loop game
+    if not (Refs.World and Refs.Inv and Refs.State and Refs.Gems and Refs.Hud) and Anim.loopScan then
+        local okL, errL = pcall(Anim.loopScan)
+        if not okL then warn("[SkyP] loopScan: " .. tostring(errL)) end
+    end
     if not Refs.Inv and invLoose then Refs.Inv = invLoose end
     if not Refs.Punch and punchLoose then Refs.Punch = punchLoose end
     return Refs.World ~= nil
@@ -3008,6 +3013,121 @@ function getUpvalues(fn)
         end
     end
     return out
+end
+
+-- v2.7: cari data game dengan menelusuri upvalue & isi tabel mulai dari fungsi loop game
+-- (RenderStepped / Heartbeat / ...). Dipakai kalau getgc tidak mengembalikan tabel game.
+function Anim.loopScan()
+    if not getconnections then return false end
+    local seen, queue, qi, nodes = {}, {}, 1, 0
+    for _, name in ipairs({ "RenderStepped", "Heartbeat", "Stepped", "PreRender", "PreSimulation", "PostSimulation" }) do
+        local okS, sig = pcall(function() return RunService[name] end)
+        if okS and sig then
+            local ok, conns = pcall(getconnections, sig)
+            if ok and type(conns) == "table" then
+                for _, c in ipairs(conns) do
+                    local okf, fn = pcall(function() return c.Function end)
+                    if okf and type(fn) == "function" and not seen[fn] and isGameFn(fn) then
+                        seen[fn] = true
+                        queue[#queue + 1] = fn
+                    end
+                end
+            end
+        end
+    end
+    local function push(x)
+        if not seen[x] then
+            seen[x] = true
+            queue[#queue + 1] = x
+        end
+    end
+    local function stateOf(v)
+        local fn = rawget(v, "state")
+        if type(fn) ~= "function" then return nil end
+        local function good(s)
+            return type(s) == "table" and type(s.x) == "number" and type(s.y) == "number" and s.facing ~= nil
+        end
+        local ok, s = pcall(fn)
+        if ok and good(s) then return fn end
+        ok, s = pcall(fn, v) -- bentuk method: state(self)
+        if ok and good(s) then return function() return fn(v) end end
+        return nil
+    end
+    local function gridDims(g)
+        local rows, cols = 0, 0
+        for k, row in next, g do
+            if type(k) == "number" and type(row) == "table" then
+                rows += 1
+                if cols == 0 then for _ in next, row do cols += 1 end end
+            end
+        end
+        return cols, rows
+    end
+    local function done()
+        return Refs.World and Refs.Inv and Refs.State and Refs.Gems and Refs.Hud and Refs.SetTile and Refs.Punch
+    end
+    while qi <= #queue and nodes < 60000 and not done() do
+        local x = queue[qi]
+        qi += 1
+        nodes += 1
+        if nodes % 1500 == 0 then task.wait() end
+        if type(x) == "function" then
+            if not (iscclosure and iscclosure(x)) then
+                if not Refs.SetTile and isSetTileFn(x) and isGameFn(x) then Refs.SetTile = x
+                elseif not Refs.Punch and isPunchFn(x) and isGameFn(x) then Refs.Punch = x end
+                for _, u in pairs(getUpvalues(x)) do
+                    local tu = type(u)
+                    if tu == "table" or tu == "function" then push(u) end
+                end
+            end
+        elseif type(x) == "table" then
+            pcall(function()
+                local fg, bg = rawget(x, "fg"), rawget(x, "bg")
+                if not Refs.World and type(fg) == "table" and type(bg) == "table"
+                    and (type(rawget(x, "call")) == "function" or type(rawget(x, "dropList")) == "function") then
+                    -- lebar & tinggi: pakai yang ada, kalau tidak ada dihitung dari grid tile
+                    if type(rawget(x, "w")) ~= "number" or type(rawget(x, "h")) ~= "number" then
+                        local W, H = gridDims(fg)
+                        if W > 0 and H > 0 then
+                            rawset(x, "w", W)
+                            rawset(x, "h", H)
+                        end
+                    end
+                    Refs.World = x
+                    return -- isi world (grid besar) tidak ditelusuri
+                end
+                if not Refs.Inv and type(rawget(x, "slots")) == "table" and type(rawget(x, "capacity")) == "number"
+                    and type(x.count) == "function" and type(x.room) == "function" then
+                    Refs.Inv = x
+                end
+                if not Refs.State then
+                    local st = stateOf(x)
+                    if st then Refs.State = st end
+                end
+                if not Refs.Gems and type(rawget(x, "addGems")) == "function" then Refs.Gems = x end
+                if not Refs.Hud and type(rawget(x, "handPower")) == "function"
+                    and (type(rawget(x, "punchRange")) == "function" or type(rawget(x, "buildRange")) == "function") then
+                    Refs.Hud = x
+                end
+                if not Refs.Menu and type(rawget(x, "openBackpack")) == "function" and type(rawget(x, "ui")) == "table" then
+                    Refs.Menu = x
+                end
+                if not Refs.Others and type(rawget(x, "list")) == "function" and type(rawget(x, "where")) == "function"
+                    and type(rawget(x, "playerAt")) == "function" then
+                    Refs.Others = x
+                end
+                local n = 0
+                for _, v in next, x do
+                    n += 1
+                    if n > 600 then break end
+                    local tv = type(v)
+                    if tv == "table" or tv == "function" then push(v) end
+                end
+            end)
+        end
+    end
+    Anim.LoopNodes = nodes
+    return Refs.World ~= nil
 end
 
 -- Cek apakah tabel ini daftar drop game
