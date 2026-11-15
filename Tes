@@ -46,7 +46,7 @@ end
 --   "off"  = server belum punya rute /hb (pengecekan belum dipasang): script jalan seperti biasa
 -- Tidak ada rahasia di sini. Menu Admin hanya muncul untuk key yang ditandai admin di server,
 -- dan tiap aksi admin tetap dicek server memakai ADMIN_KEY yang diketik sendiri.
-Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.7", Admin = false, Fails = 0, Off = false }
+Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.8", Admin = false, Fails = 0, Off = false }
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -2323,12 +2323,21 @@ local function isPunchFn(fn)
     if islclosure and not islclosure(fn) then return false end
     local ok, consts = pcall(getconsts, fn)
     if not ok or type(consts) ~= "table" then return false end
-    local hasVend, hasMark = false, false
+    local hasVend, hasMark, hasMiss, hasEvent, hasFg = false, false, false, false, false
     for _, c in pairs(consts) do
         if c == "Empty the Vending Machine first!" then hasVend = true
-        elseif c == "newCrack" or c == "HarvestProvider" then hasMark = true end
+        elseif c == "newCrack" or c == "HarvestProvider" then hasMark = true
+        elseif c == "punch_miss" then hasMiss = true
+        elseif c == "punchEvent" then hasEvent = true
+        elseif c == "fg" then hasFg = true end
     end
-    return hasVend and hasMark
+    if hasVend and hasMark then return true end
+    -- v2.8 (game v1809): fungsi pukul 'hit' (4 parameter) ditandai suara punch_miss + punchEvent
+    if hasMiss and hasEvent and hasFg then
+        local okA, nparams = pcall(debug.info, fn, "a")
+        return not okA or nparams == 4
+    end
+    return false
 end
 
 -- Fungsi game yang menggambar tangan karakter saat memukul / memasang
