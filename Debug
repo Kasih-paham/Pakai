@@ -1,4 +1,4 @@
--- SkyP_Debug11.lua : isi tabel world (w/h) + proxy yang punya kunci khas SkyP (versi ringan)
+-- SkyP_Debug12.lua : cari fungsi game yang memegang grid tile & tas (lewat upvalue), lalu modul pemiliknya
 -- Jalankan SAAT SUDAH DI DALAM WORLD (berdiri di world, bukan di layar pilih world).
 -- Hasil tampil di layar dan OTOMATIS disalin ke clipboard.
 
@@ -18,7 +18,7 @@ fr.Size = UDim2.new(0.62, 0, 0.72, 0); fr.Position = UDim2.new(0.19, 0, 0.14, 0)
 fr.BackgroundColor3 = Color3.fromRGB(10, 14, 26); fr.BorderSizePixel = 0; fr.Parent = sg
 local title = Instance.new("TextLabel")
 title.Size = UDim2.new(1, -90, 0, 30); title.Position = UDim2.new(0, 8, 0, 2)
-title.BackgroundTransparency = 1; title.Text = "SkyP Debug 11 (world & proxy, ringan)"
+title.BackgroundTransparency = 1; title.Text = "SkyP Debug 12 (upvalue)"
 title.TextColor3 = Color3.fromRGB(110, 175, 255); title.TextXAlignment = Enum.TextXAlignment.Left
 title.Font = Enum.Font.GothamBold; title.TextSize = 16; title.Parent = fr
 local close = Instance.new("TextButton")
@@ -52,7 +52,26 @@ local function good(t) log(t, "#5be08a") end
 
 
 
+
 local getmt = getrawmetatable or getmetatable
+local getup = (debug and debug.getupvalue) or getupvalue
+local getups = (debug and debug.getupvalues) or getupvalues
+
+local function ups(f)
+    if getups then
+        local ok, t = pcall(getups, f)
+        if ok and type(t) == "table" then return t end
+    end
+    local out = {}
+    if getup then
+        for i = 1, 80 do
+            local ok, v = pcall(getup, f, i)
+            if not ok then break end
+            out[i] = v
+        end
+    end
+    return out
+end
 
 local function rawKeys(t, max)
     max = max or 50
@@ -77,83 +96,123 @@ local function rawKeys(t, max)
     return ("(%d kunci, %d angka) "):format(n, nnum) .. table.concat(list, ", ") .. extra
 end
 
--- kunci khas SkyP (tidak ada di tabel global Roblox / executor)
-local PROBE = { fg = "table", bg = "table", state = "function", addGems = "function", punchRange = "function",
-    handPower = "function", openBackpack = "function", playerAt = "function", takeDrop = "function",
-    dropList = "function", spliceSeed = "function", tileChanged = "function", vendCall = "function", jammerOn = "function" }
-
-local function isGlobalEnv(t, idx)
-    if rawget(t, "script") ~= nil or rawget(t, "_G") ~= nil then return true end
-    if type(idx) == "table" and (rawget(idx, "game") ~= nil or rawget(idx, "Instance") ~= nil
-        or rawget(idx, "getgenv") ~= nil or rawget(idx, "AdReward") ~= nil or rawget(idx, "DELTA_VERSION_NUM") ~= nil) then
-        return true
+local function upSummary(u)
+    local parts = {}
+    for i, x in pairs(u) do
+        local tx = typeof(x)
+        local s = i .. ":" .. tx
+        if tx == "number" or tx == "boolean" then s = s .. "=" .. tostring(x)
+        elseif tx == "string" then s = s .. "=" .. x:sub(1, 16) end
+        parts[#parts + 1] = s
     end
-    return false
+    return table.concat(parts, ", ")
+end
+
+local function gridSize(t)
+    local rows, cols = 0, 0
+    local ok = pcall(function()
+        for k, row in next, t do
+            if type(k) ~= "number" or type(row) ~= "table" then rows = -999 return end
+            rows = rows + 1
+            if rows == 1 then for _, x in next, row do cols = cols + 1 if cols > 300 then break end end end
+            if rows > 2000 then break end
+        end
+    end)
+    if ok and rows >= 30 and cols >= 30 then return rows, cols end
 end
 
 local function main()
-    title.Text = "SkyP Debug 11: memindai..."
+    log("getupvalue=" .. tostring(getup ~= nil) .. " getupvalues=" .. tostring(getups ~= nil)
+        .. " debug.info=" .. tostring(debug and debug.info ~= nil))
+    if not getup and not getups then bad("executor tidak bisa membaca upvalue") return end
+
+    local InvMod
+    for _, mod in ipairs(getloadedmodules()) do
+        local ok, m = pcall(require, mod)
+        if ok and type(m) == "table" then
+            local ok2, yes = pcall(function()
+                return type(m.room) == "function" and type(m.used) == "function" and type(m.count) == "function" and type(m.new) == "function"
+            end)
+            if ok2 and yes then InvMod = m break end
+        end
+    end
+
+    title.Text = "SkyP Debug 12: cari grid & tas..."
     local gc = getgc(true)
     log("getgc: " .. #gc .. " objek")
-    local worlds, hits = {}, {}
+    local target = {} -- [obj] = label
+    local nGrid = 0
     for i, v in ipairs(gc) do
-        if i % 2000 == 0 then
-            title.Text = ("SkyP Debug 11: %d%%"):format(math.floor(i / #gc * 100))
-            task.wait()
-        end
+        if i % 2000 == 0 then title.Text = ("SkyP Debug 12: tahap 1 %d%%"):format(math.floor(i / #gc * 100)) task.wait() end
         if type(v) == "table" then
             pcall(function()
-                if #worlds < 4 and type(rawget(v, "w")) == "number" and type(rawget(v, "h")) == "number" then
-                    worlds[#worlds + 1] = v
+                if nGrid < 8 then
+                    local r, c = gridSize(v)
+                    if r then nGrid = nGrid + 1 target[v] = ("GRID%d %dx%d"):format(nGrid, r, c) end
                 end
-                if #hits >= 12 then return end
-                local mt = getmt(v)
-                if type(mt) ~= "table" then return end
-                local idx = rawget(mt, "__index")
-                if type(idx) ~= "table" or idx == mt or isGlobalEnv(v, idx) then return end
-                -- hanya __index berupa TABEL: baca kunci dari tabel itu (tanpa memanggil fungsi apa pun)
-                local found = {}
-                for k, ty in pairs(PROBE) do
-                    if rawget(v, k) == nil and type(rawget(idx, k)) == ty then found[#found + 1] = k end
+                if InvMod then
+                    local mt = getmt(v)
+                    if mt == InvMod or (type(mt) == "table" and rawget(mt, "__index") == InvMod) then target[v] = "TAS" end
                 end
-                if #found > 0 then hits[#hits + 1] = { v, idx, found } end
             end)
         end
     end
-    title.Text = "SkyP Debug 11 (selesai)"
+    local labels = {}
+    for _, l in pairs(target) do labels[#labels + 1] = l end
+    log("target: " .. table.concat(labels, ", "))
 
-    head("TABEL W/H (calon world)")
-    if #worlds == 0 then bad("tidak ada") end
-    for i, v in ipairs(worlds) do
-        log(("W%d %s"):format(i, rawKeys(v, 80)))
-        local ok, mt = pcall(getmt, v)
-        if ok and type(mt) == "table" then
-            local idx = rawget(mt, "__index")
-            log("   metatable __index=" .. typeof(idx) .. (type(idx) == "table" and (" -> " .. rawKeys(idx, 40)) or ""))
-        else
-            log("   tanpa metatable")
-        end
-        pcall(function()
-            local n = 0
-            for k, sub in next, v do
-                if type(sub) == "table" and n < 12 then
-                    n = n + 1
-                    local r0 = rawget(sub, 0) or rawget(sub, 1)
-                    local c = 0
-                    for _ in next, sub do c = c + 1 if c > 5000 then break end end
-                    log(("   [%s] tabel n=%d isi[0/1]=%s"):format(tostring(k), c, typeof(r0)))
+    head("FUNGSI YANG MEMEGANG GRID / TAS")
+    local holders, hcount, perLabel = {}, 0, {}
+    for i, f in ipairs(gc) do
+        if i % 1500 == 0 then title.Text = ("SkyP Debug 12: tahap 2 %d%%"):format(math.floor(i / #gc * 100)) task.wait() end
+        if type(f) == "function" and hcount < 30 then
+            local okC = true
+            if iscclosure then okC = not iscclosure(f) end
+            if okC then
+                local u = ups(f)
+                for idx, x in pairs(u) do
+                    local l = target[x]
+                    if l and (perLabel[l] or 0) < 4 then
+                        perLabel[l] = (perLabel[l] or 0) + 1
+                        hcount = hcount + 1
+                        holders[f] = l
+                        local okN, nm = pcall(debug.info, f, "n")
+                        local okS, src = pcall(debug.info, f, "s")
+                        good(("%s <- fungsi '%s' upvalue #%s | %s"):format(l, tostring(okN and nm or "?"), tostring(idx),
+                            tostring(okS and src or "?"):sub(-50)))
+                        log("   upvalue: " .. upSummary(u))
+                        break
+                    end
                 end
             end
-        end)
+        end
     end
+    if hcount == 0 then bad("tidak ada fungsi yang memegangnya") end
 
-    head("PROXY DENGAN KUNCI KHAS SKYP")
-    if #hits == 0 then bad("tidak ada") end
-    for i, h in ipairs(hits) do
-        good(("X%d kunci: %s"):format(i, table.concat(h[3], ", ")))
-        log("   raw: " .. rawKeys(h[1], 25))
-        log("   __index: " .. rawKeys(h[2], 40))
+    head("MODUL / TABEL YANG MENYIMPAN FUNGSI ITU")
+    local owners = 0
+    if next(holders) then
+        for i, v in ipairs(gc) do
+            if i % 2000 == 0 then title.Text = ("SkyP Debug 12: tahap 3 %d%%"):format(math.floor(i / #gc * 100)) task.wait() end
+            if type(v) == "table" and owners < 8 then
+                pcall(function()
+                    local n = 0
+                    for k, x in next, v do
+                        n = n + 1
+                        if n > 400 then break end
+                        if holders[x] then
+                            owners = owners + 1
+                            good(("O%d %s disimpan di kunci '%s'"):format(owners, holders[x], tostring(k)))
+                            log("   tabel: " .. rawKeys(v, 70))
+                            break
+                        end
+                    end
+                end)
+            end
+        end
     end
+    if owners == 0 then bad("tidak ada tabel yang menyimpannya") end
+    title.Text = "SkyP Debug 12 (selesai)"
 end
 
 local s, e = pcall(main)
