@@ -8928,6 +8928,12 @@ Auto.here = function()
     return nil
 end
 Auto.startClear = startClear
+-- v2.9: dipakai modul Auto Leveling (fungsi-fungsi ini ada di dalam blok, tidak terlihat dari luar)
+Auto.playerState = playerState
+Auto.goWorld = goWorld
+Auto.canWorkAt = canWorkAt
+Auto.clearLayerAt = clearLayerAt
+Auto.checkAutoStart = checkAutoStart
 -- Ambil block (drop) di sekitar sampai punya lagi. Hasil: true kalau block sudah ada.
 function Auto.refillBlock(id, live)
     -- PATCH refill: ambil SEMUA block itu di radius (bukan cuma sampai punya 1),
@@ -18166,6 +18172,12 @@ end)() end
 do (function()
     local Lv = Clear.Lv
     local rng = Random.new()
+    -- fungsi dari blok Auto (tidak terlihat langsung dari sini)
+    local playerState = Auto.playerState
+    local goWorld = Auto.goWorld
+    local canWorkAt = Auto.canWorkAt
+    local clearLayerAt = Auto.clearLayerAt
+    local checkAutoStart = Auto.checkAutoStart
     local LVKEY = { level = true, lvl = true, lv = true, playerlevel = true, plevel = true }
 
     local function set(t) Lv.Status = t end
@@ -18250,11 +18262,12 @@ do (function()
     end
 
     -- isi tabel ringkas untuk laporan: nama(tipe) / nama=angka, maks 30
-    local function keyList(t)
+    local function keyList(t, max)
         local out, n = {}, 0
+        max = max or 30
         for k, v in next, t do
             n += 1
-            if n > 30 then
+            if n > max then
                 out[#out + 1] = "..."
                 break
             end
@@ -18358,7 +18371,11 @@ do (function()
                 end
             end
             if xpLogged == 0 then log("memori: tidak ada tabel xp / exp") end
-            if type(Net) == "table" then log("Net: " .. keyList(Net)) end
+            if type(Net) == "table" then log("Net: " .. keyList(Net, 150)) end
+            if type(Refs.Hud) == "table" then log("isi HUD: " .. keyList(Refs.Hud, 80)) end
+            if type(Refs.Gems) == "table" then log("isi Gems: " .. keyList(Refs.Gems, 80)) end
+            local okS, st = pcall(Auto.playerState)
+            if okS and type(st) == "table" then log("isi state: " .. keyList(st, 80)) end
         end
         if best and bestScore >= 2 then return best, bestKey, bestScore end
         return nil
@@ -18551,7 +18568,7 @@ do (function()
             if v then Lv.Get, Lv.Src, Lv.Level = get, src, v end
         end
         local head = v and ("Level terbaca: %d (dari %s)"):format(v, src) or "Level TIDAK terbaca"
-        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. " (build lv4)\n" .. head .. "\n"
+        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. " (build lv5)\n" .. head .. "\n"
             .. (#lines > 0 and table.concat(lines, "\n") or "(tidak ada kandidat lv / level / xp / exp)")
         warn("[SkyP] ===== " .. head .. " | " .. #lines .. " kandidat =====")
         for _, l in ipairs(lines) do warn("[SkyP]   " .. l) end
