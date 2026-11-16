@@ -1856,6 +1856,8 @@ local Clear = {
         Cleared = 0,          -- world yang selesai di-clear
         Level = nil,          -- level terakhir yang terbaca
         Level0 = nil,         -- level saat mulai
+        Known = 0,            -- level yang diketahui (diisi manual / dari event levelUp), 0 = belum tahu. Disimpan di config
+        UpCount = 0,          -- berapa kali event levelUp masuk sesi ini
         Src = nil,            -- asal angka level ("HUD", "leaderstats", ...)
         World = "",           -- world yang sedang di-clear
         Status = "Mati",
@@ -2229,7 +2231,7 @@ Config.add("Farm", State, {
     "SeedDrop", "SeedDropAt", "SeedKeep", "AutoRefill", "RefillRadius", "AutoReturn",
 })
 Config.add("Clear", Clear, { "UseBlock", "ScaffoldId", "Collect", "Sweep", "LimitOn", "LimitPct" })
-Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere" })
+Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere", "Known" })
 Config.add("Farmer", Farmer, {
     "Harvest", "Plant", "Collect", "UseBlock", "ScaffoldId", "HarvestMs", "PlantMs", "SeedId",
 })
@@ -10478,6 +10480,27 @@ safe(function()
         end,
     })
 end)
+safe(function()
+    Box.ClearLv:Input({
+        Title = "Level sekarang",
+        Desc = "Game tidak mengirim angka level ke HP. Isi sekali, naik level berikutnya dihitung otomatis (event levelUp). 0 = belum tahu",
+        Value = tostring(Clear.Lv.Known or 0),
+        Placeholder = "contoh: 3",
+        Callback = function(text)
+            local n = tonumber(string.match(tostring(text or ""), "%d+"))
+            if not n then return end
+            n = math.clamp(math.floor(n), 0, 999)
+            Clear.Lv.Known = n
+            Clear.Lv.KnownSrc = "isian manual"
+            if n > 0 then
+                Clear.Lv.Level = n
+                notify("Auto Leveling", "Level sekarang: " .. n, 3)
+            else
+                Clear.Lv.Level = nil
+            end
+        end,
+    })
+end)
 addNumber(Box.ClearLv, {
     Title = "Level target",
     Desc = "Berhenti kalau level sudah segini",
@@ -18525,6 +18548,13 @@ do (function()
     -- Level sekarang (nil = belum terbaca). Sumber diingat; dicari ulang tiap 10 dtk
     -- (memori/getgc paling cepat tiap 60 dtk karena berat).
     function Lv.read()
+        -- game tidak menyimpan angka level di HP: level dari isian manual + event levelUp (lihat di bawah)
+        local known = okNum(Lv.Known)
+        if known then
+            Lv.Level = known
+            Lv.Src = Lv.KnownSrc or "isian manual"
+            return known
+        end
         if Lv.Get then
             local ok, v = pcall(Lv.Get)
             v = ok and okNum(v) or nil
@@ -18559,6 +18589,9 @@ do (function()
                 inW and "ya" or "tidak", Refs.State and "ada" or "TIDAK", Refs.Hud and "ada" or "TIDAK",
                 Refs.Gems and "ada" or "TIDAK", type(getgc) == "function" and "ada" or "TIDAK")
         end)
+        lines[#lines + 1] = ("event levelUp: %s | masuk %d kali%s"):format(tostring(Lv.UpHook), Lv.UpCount or 0,
+            Lv.LastUp and (" | terakhir: " .. Lv.LastUp) or "")
+        lines[#lines + 1] = "level diketahui: " .. ((okNum(Lv.Known) and (tostring(Lv.Known) .. " (" .. tostring(Lv.KnownSrc or "isian manual") .. ")")) or "belum (isi 'Level sekarang')")
         local okF, get, src = pcall(findSource, true, function(t) lines[#lines + 1] = t end)
         if not okF then lines[#lines + 1] = "error: " .. tostring(get) end
         local v
@@ -18567,8 +18600,9 @@ do (function()
             v = ok and okNum(n) or nil
             if v then Lv.Get, Lv.Src, Lv.Level = get, src, v end
         end
+        if not v and okNum(Lv.Known) then v, src = okNum(Lv.Known), Lv.KnownSrc or "isian manual" end
         local head = v and ("Level terbaca: %d (dari %s)"):format(v, src) or "Level TIDAK terbaca"
-        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. " (build lv5)\n" .. head .. "\n"
+        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. " (build lv6)\n" .. head .. "\n"
             .. (#lines > 0 and table.concat(lines, "\n") or "(tidak ada kandidat lv / level / xp / exp)")
         warn("[SkyP] ===== " .. head .. " | " .. #lines .. " kandidat =====")
         for _, l in ipairs(lines) do warn("[SkyP]   " .. l) end
@@ -18582,6 +18616,95 @@ do (function()
             pcall(function() UI.LvDiag:SetDesc(table.concat(show, "\n")) end)
         end
         return v, src, lines
+    end
+
+    -- ---------- event levelUp dari server (Net.on hanya MENDENGAR, tidak kirim apa pun) ----------
+    local function describe(v, depth)
+        depth = depth or 0
+        local tv = type(v)
+        if tv == "table" then
+            if depth >= 1 then return "{...}" end
+            local out, n = {}, 0
+            for k, x in next, v do
+                n += 1
+                if n > 12 then
+                    out[#out + 1] = "..."
+                    break
+                end
+                out[#out + 1] = tostring(k) .. "=" .. describe(x, depth + 1)
+            end
+            return "{" .. table.concat(out, ", ") .. "}"
+        elseif tv == "string" then
+            return string.format("%q", string.sub(v, 1, 40))
+        end
+        return tostring(v)
+    end
+
+    local function onLevelUp(...)
+        local args = table.pack(...)
+        local parts, found = {}, nil
+        for i = 1, args.n do
+            local v = args[i]
+            parts[#parts + 1] = describe(v)
+            if not found then
+                if okNum(v) then
+                    found = okNum(v)
+                elseif type(v) == "table" then
+                    for _, k in ipairs({ "level", "Level", "lvl", "lv", "newLevel", "to", "value" }) do
+                        local n = okNum(rawget(v, k))
+                        if n then
+                            found = n
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        Lv.UpCount += 1
+        Lv.LastUp = table.concat(parts, ", ")
+        local known = okNum(Lv.Known)
+        local new
+        if found and (not known or (found >= known and found <= known + 5)) then
+            new = found                         -- angka level dari event
+            Lv.KnownSrc = "event levelUp"
+        elseif known then
+            new = known + 1                     -- event tanpa angka level: dihitung +1
+            Lv.KnownSrc = "dihitung dari levelUp"
+        end
+        if new then
+            Lv.Known = new
+            Lv.Level = new
+            Lv.Src = Lv.KnownSrc
+            notify("Level naik", "Level " .. new .. (Lv.On and (" / target " .. tostring(Lv.Target)) or ""), 5)
+            Hook.send("bonus", "Naik level: " .. new)
+        else
+            notify("Level naik", "Level naik! Isi 'Level sekarang' di Auto Leveling supaya angkanya terhitung", 6)
+        end
+    end
+
+    -- pasang listener (sekali per execute; tidak bisa dilepas, jadi dicek alive())
+    do
+        local evName, why = nil, nil
+        if NetOk and type(Net) == "table" and type(Net.on) == "function" then
+            if type(Net.EVENTS) == "table" then
+                for k, v in pairs(Net.EVENTS) do
+                    if type(k) == "string" and string.lower(k) == "levelup" then evName = k end
+                    if not evName and type(v) == "string" and string.lower(v) == "levelup" then evName = v end
+                end
+            end
+            evName = evName or "LevelUp"
+            local ok, err = pcall(Net.on, evName, function(...)
+                if alive() then pcall(onLevelUp, ...) end
+            end)
+            if ok then
+                Lv.UpHook = "terpasang (" .. evName .. ")"
+            else
+                why = tostring(err)
+            end
+        else
+            why = "Net.on tidak ada"
+        end
+        if not Lv.UpHook then Lv.UpHook = "GAGAL: " .. tostring(why) end
     end
 
     -- ---------- world acak ----------
