@@ -18213,11 +18213,20 @@ do (function()
         return ok and txt or nil
     end
 
+    -- upvalue fungsi (pakai getUpvalues script, cadangan: fungsi executor)
+    local function readUps(f)
+        local fn = (type(getUpvalues) == "function" and getUpvalues)
+            or (debug and debug.getupvalues) or getupvalues
+        if type(fn) ~= "function" then return nil end
+        local ok, ups = pcall(fn, f)
+        return ok and type(ups) == "table" and ups or nil
+    end
+
     -- angka bulat 1..999 di upvalue fungsi; lebih dari 1 angka berbeda = ragu (nil)
     local function fnLevel(f)
         if type(f) ~= "function" then return nil end
-        local okU, ups = pcall(getUpvalues, f)
-        if not okU or type(ups) ~= "table" then return nil end
+        local ups = readUps(f)
+        if not ups then return nil end
         local found
         for _, v in pairs(ups) do
             local n = okNum(v)
@@ -18230,8 +18239,8 @@ do (function()
     end
 
     local function upvalText(f)
-        local okU, ups = pcall(getUpvalues, f)
-        if not okU or type(ups) ~= "table" then return "?" end
+        local ups = readUps(f)
+        if not ups then return "?" end
         local t = {}
         for _, v in pairs(ups) do
             if type(v) == "number" then t[#t + 1] = tostring(v) end
@@ -18301,9 +18310,20 @@ do (function()
         local function take(g, s)
             if not get then get, src = g, s end
         end
+        -- tiap langkah dilindungi: 1 langkah error tidak menghentikan langkah lain
+        local function step(name, fn)
+            local ok, e = pcall(fn)
+            if not ok and log then log(("langkah %s error: %s"):format(name, tostring(e))) end
+        end
+        local function state()
+            if type(playerState) ~= "function" then return nil end
+            local ok, s = pcall(playerState)
+            return ok and type(s) == "table" and s or nil
+        end
+
         -- 1) atribut pemain
-        local okA, attrs = pcall(function() return LocalPlayer:GetAttributes() end)
-        if okA and type(attrs) == "table" then
+        step("atribut", function()
+            local attrs = LocalPlayer:GetAttributes()
             for k, v in pairs(attrs) do
                 if log and cand(k) then log(("atribut %s = %s"):format(tostring(k), tostring(v))) end
                 if type(k) == "string" and LVKEY[string.lower(k)] and okNum(v) then
@@ -18311,15 +18331,16 @@ do (function()
                     take(function() return LocalPlayer:GetAttribute(key) end, "atribut " .. key)
                 end
             end
-        end
+        end)
         if get and not log then return get, src end
+
         -- 2) leaderstats + nilai Level di folder pemain (Data / Stats / dll)
-        local okD, desc = pcall(function() return LocalPlayer:GetDescendants() end)
-        if okD and type(desc) == "table" then
-            for _, c in ipairs(desc) do
+        step("nilai pemain", function()
+            for _, c in ipairs(LocalPlayer:GetDescendants()) do
                 if c:IsA("ValueBase") then
                     local okV, v = pcall(function() return c.Value end)
-                    if log and (cand(c.Name) or (c.Parent and c.Parent.Name == "leaderstats")) then
+                    local par = c.Parent
+                    if log and (cand(c.Name) or (par and par.Name == "leaderstats")) then
                         log(("nilai %s = %s"):format(c:GetFullName(), tostring(okV and v)))
                     end
                     if LVKEY[string.lower(c.Name)] and okV and okNum(v) then
@@ -18328,56 +18349,65 @@ do (function()
                     end
                 end
             end
-        end
+        end)
         if get and not log then return get, src end
+
         -- 3) + 4) tabel game yang sudah ketemu (angka, atau angka di dalam fungsi bernama level)
-        for _, e in ipairs({ { "HUD", Refs.Hud }, { "Gems", Refs.Gems }, { "Menu", Refs.Menu }, { "Inv", Refs.Inv } }) do
-            local t = e[2]
-            if type(t) == "table" then
-                local n = 0
-                for k, v in next, t do
-                    n += 1
-                    if n > 400 then break end
-                    if type(k) == "string" and cand(k) then
-                        if type(v) == "function" then
-                            if log then log(("%s.%s() upvalue %s"):format(e[1], k, upvalText(v))) end
-                            local s = string.lower(k)
-                            if (s:find("level") or s == "lv" or s == "lvl") and fnLevel(v) then
-                                local f = v
-                                take(function() return fnLevel(f) end, e[1] .. "." .. k .. "()")
-                            end
-                        else
-                            if log then log(("%s.%s = %s"):format(e[1], k, tostring(v))) end
-                            if LVKEY[string.lower(k)] and okNum(v) then
-                                local tbl, key = t, k
-                                take(function() return rawget(tbl, key) end, e[1] .. "." .. key)
+        step("tabel game", function()
+            for _, e in ipairs({ { "HUD", Refs.Hud }, { "Gems", Refs.Gems }, { "Menu", Refs.Menu }, { "Inv", Refs.Inv } }) do
+                local t = e[2]
+                if type(t) == "table" then
+                    local n = 0
+                    for k, v in next, t do
+                        n += 1
+                        if n > 400 then break end
+                        if type(k) == "string" and cand(k) then
+                            if type(v) == "function" then
+                                if log then log(("%s.%s() upvalue %s"):format(e[1], k, upvalText(v))) end
+                                local s = string.lower(k)
+                                if (s:find("level") or s == "lv" or s == "lvl") and fnLevel(v) then
+                                    local f = v
+                                    take(function() return fnLevel(f) end, e[1] .. "." .. k .. "()")
+                                end
+                            else
+                                if log then log(("%s.%s = %s"):format(e[1], k, tostring(v))) end
+                                if LVKEY[string.lower(k)] and okNum(v) then
+                                    local tbl, key = t, k
+                                    take(function() return rawget(tbl, key) end, e[1] .. "." .. key)
+                                end
                             end
                         end
                     end
+                elseif log then
+                    log(("Refs.%s belum ketemu"):format(e[1]))
                 end
             end
-        end
-        local s = playerState()
-        if type(s) == "table" then
+        end)
+        step("state pemain", function()
+            local s = state()
+            if not s then
+                if log then log("state pemain tidak terbaca (belum masuk world?)") end
+                return
+            end
             for k, v in next, s do
                 if type(k) == "string" and cand(k) then
                     if log then log(("state.%s = %s"):format(k, tostring(v))) end
                     if LVKEY[string.lower(k)] and okNum(v) then
                         local key = k
                         take(function()
-                            local st = playerState()
+                            local st = state()
                             return st and st[key]
                         end, "state." .. key)
                     end
                 end
             end
-        end
+        end)
         if get and not log then return get, src end
+
         -- 6) teks HUD game (UI SkyP ada di gethui/CoreGui, jadi tidak ikut terbaca di sini)
-        local okG, ds = pcall(function() return PlayerGui:GetDescendants() end)
-        if okG and type(ds) == "table" then
+        step("teks HUD", function()
             local shown = 0
-            for _, d in ipairs(ds) do
+            for _, d in ipairs(PlayerGui:GetDescendants()) do
                 if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
                     local txt = labelText(d)
                     if log and type(txt) == "string" and #txt <= 40 and cand(txt) and shown < 15 then
@@ -18393,18 +18423,23 @@ do (function()
                     end
                 end
             end
-        end
+        end)
         if get and not log then return get, src end
+
         -- 5) memori (berat: hanya kalau deep)
         if deep then
-            local obj, key = gcLevelTable(log)
-            if obj then
-                if type(obj) == "function" then
-                    take(function() return fnLevel(obj) end, "memori " .. key .. "()")
-                else
-                    take(function() return rawget(obj, key) end, "memori ." .. key)
+            step("memori", function()
+                local obj, key = gcLevelTable(log)
+                if obj then
+                    if type(obj) == "function" then
+                        take(function() return fnLevel(obj) end, "memori " .. key .. "()")
+                    else
+                        take(function() return rawget(obj, key) end, "memori ." .. key)
+                    end
+                elseif log then
+                    log(type(getgc) == "function" and "memori: tidak ada tabel level" or "memori: executor tidak punya getgc")
                 end
-            end
+            end)
         end
         return get, src
     end
