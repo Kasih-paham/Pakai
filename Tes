@@ -18203,7 +18203,21 @@ do (function()
     local checkAutoStart = Auto.checkAutoStart
     local LVKEY = { level = true, lvl = true, lv = true, playerlevel = true, plevel = true }
 
-    local function set(t) Lv.Status = t end
+    -- status + riwayat (15 terakhir, tampil di laporan Cek level)
+    Lv.Hist = Lv.Hist or {}
+    local function set(t)
+        t = tostring(t)
+        if Lv.Status ~= t then
+            local h = Lv.Hist
+            -- status hitung mundur / sisa tile: cukup 1 baris terakhir (tidak memenuhi riwayat)
+            local key = t:gsub("%d+", "#")
+            if h[#h] and h[#h].key == key then table.remove(h) end
+            h[#h + 1] = { key = key, text = os.date("%H:%M:%S") .. " " .. t }
+            while #h > 15 do table.remove(h, 1) end
+        end
+        Lv.Status = t
+    end
+    Lv.set = set
 
     -- ---------- baca level ----------
     -- Sumber dicoba berurutan; yang pertama ketemu dipakai lalu diingat:
@@ -18592,6 +18606,10 @@ do (function()
         lines[#lines + 1] = ("event levelUp: %s | masuk %d kali%s"):format(tostring(Lv.UpHook), Lv.UpCount or 0,
             Lv.LastUp and (" | terakhir: " .. Lv.LastUp) or "")
         lines[#lines + 1] = "level diketahui: " .. ((okNum(Lv.Known) and (tostring(Lv.Known) .. " (" .. tostring(Lv.KnownSrc or "isian manual") .. ")")) or "belum (isi 'Level sekarang')")
+        if Lv.Hist and #Lv.Hist > 0 then
+            lines[#lines + 1] = "riwayat Auto Leveling:"
+            for _, h in ipairs(Lv.Hist) do lines[#lines + 1] = "  " .. h.text end
+        end
         local okF, get, src = pcall(findSource, true, function(t) lines[#lines + 1] = t end)
         if not okF then lines[#lines + 1] = "error: " .. tostring(get) end
         local v
@@ -18602,7 +18620,7 @@ do (function()
         end
         if not v and okNum(Lv.Known) then v, src = okNum(Lv.Known), Lv.KnownSrc or "isian manual" end
         local head = v and ("Level terbaca: %d (dari %s)"):format(v, src) or "Level TIDAK terbaca"
-        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. " (build lv6)\n" .. head .. "\n"
+        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. " (build lv7)\n" .. head .. "\n"
             .. (#lines > 0 and table.concat(lines, "\n") or "(tidak ada kandidat lv / level / xp / exp)")
         warn("[SkyP] ===== " .. head .. " | " .. #lines .. " kandidat =====")
         for _, l in ipairs(lines) do warn("[SkyP]   " .. l) end
@@ -18911,6 +18929,7 @@ do (function()
         if Lv.On then return end
         local err = checkAutoStart()
         if err and err ~= "Kamu belum masuk world" then
+            set("Tidak dimulai: " .. err)
             notify("Auto Leveling", err, 5)
             if UI.LvToggle then pcall(function() UI.LvToggle:Set(false) end) end
             return
@@ -18918,7 +18937,8 @@ do (function()
         Lv.ScanAt = -99
         local lv = Lv.read()
         if lv and lv >= (tonumber(Lv.Target) or 10) then
-            notify("Auto Leveling", ("Level kamu sudah %d (target %d)"):format(lv, Lv.Target), 5)
+            set(("Tidak dimulai: level kamu sudah %d, target %d. Naikkan 'Level target'"):format(lv, Lv.Target))
+            notify("Auto Leveling", ("Level kamu sudah %d, target %d: naikkan 'Level target'"):format(lv, Lv.Target), 6)
             if UI.LvToggle then pcall(function() UI.LvToggle:Set(false) end) end
             return
         end
