@@ -1,5 +1,17 @@
 local SKYP = ...
-if type(SKYP) ~= "table" then return end
+-- v2.9: bisa jalan sendiri tanpa loader (loadstring(game:HttpGet(URL))()).
+-- Dari loader skyp-guard: SKYP dikirim loader (versi, cek key, onStop) seperti biasa.
+if type(SKYP) ~= "table" then
+    SKYP = {
+        version = "v2.9",
+        shared = {},                          -- SkyUI pakai versi yang ditanam di bawah
+        onStop = {},
+        isAlive = function() return true end, -- tanpa loader: tidak ada key yang bisa dicabut
+    }
+end
+SKYP.shared = type(SKYP.shared) == "table" and SKYP.shared or {}
+SKYP.onStop = type(SKYP.onStop) == "table" and SKYP.onStop or {}
+if type(SKYP.isAlive) ~= "function" then SKYP.isAlive = function() return true end end
 
 -- ===== Tempel isi utama script SkyP di bawah ini =====
 local API = "https://status.koplak132asu.workers.dev"
