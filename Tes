@@ -18249,6 +18249,43 @@ do (function()
         return "[" .. table.concat(t, ",") .. "]"
     end
 
+    -- isi tabel ringkas untuk laporan: nama(tipe) / nama=angka, maks 30
+    local function keyList(t)
+        local out, n = {}, 0
+        for k, v in next, t do
+            n += 1
+            if n > 30 then
+                out[#out + 1] = "..."
+                break
+            end
+            local tv = type(v)
+            if tv == "number" or tv == "boolean" then
+                out[#out + 1] = tostring(k) .. "=" .. tostring(v)
+            elseif tv == "string" then
+                out[#out + 1] = tostring(k) .. "=" .. string.format("%q", string.sub(v, 1, 20))
+            else
+                out[#out + 1] = tostring(k) .. "(" .. (tv == "function" and "fn" or tv) .. ")"
+            end
+        end
+        return "{" .. table.concat(out, ", ") .. "}"
+    end
+
+    -- konstanta fungsi (teks & angka) untuk laporan: petunjuk nama data yang dipakai fungsi itu
+    local function constText(f)
+        local gc = (debug and debug.getconstants) or getconstants
+        if type(gc) ~= "function" then return "?" end
+        local ok, cs = pcall(gc, f)
+        if not ok or type(cs) ~= "table" then return "?" end
+        local out = {}
+        for _, c in pairs(cs) do
+            if type(c) == "string" or type(c) == "number" then
+                out[#out + 1] = type(c) == "string" and string.format("%q", string.sub(c, 1, 24)) or tostring(c)
+                if #out >= 25 then break end
+            end
+        end
+        return "[" .. table.concat(out, ",") .. "]"
+    end
+
     -- tabel data pemain di memori: punya level, dan xp / id / nama pemain. Hasil: tabel, key, skor
     local function gcLevelTable(log)
         if type(getgc) ~= "function" then return nil end
@@ -18292,12 +18329,36 @@ do (function()
                             if log and logged < 12 then
                                 logged += 1
                                 log(("memori fungsi %s: upvalue %s"):format(fk, upvalText(f)))
+                                log("  konstanta: " .. constText(f))
+                                log("  tabelnya: " .. keyList(t))
                             end
                             if n and bestScore < 2 then best, bestKey, bestScore = f, fk, 2 end
                         end
                     end
                 end)
             end
+        end
+        -- mode diagnosa: tabel yang menyimpan XP (tanpa key level), petunjuk tempat data pemain
+        if log then
+            local xpLogged = 0
+            for _, t in ipairs(list) do
+                if xpLogged >= 8 then break end
+                if type(t) == "table" then
+                    pcall(function()
+                        for _, x in ipairs(XPNAMES) do
+                            if type(rawget(t, x)) == "number" then
+                                xpLogged += 1
+                                local mine = rawget(t, "userId") == uid or rawget(t, "UserId") == uid
+                                    or rawget(t, "name") == uname or rawget(t, "Name") == uname
+                                log(("memori xp%s: %s"):format(mine and " (punya kamu)" or "", keyList(t)))
+                                return
+                            end
+                        end
+                    end)
+                end
+            end
+            if xpLogged == 0 then log("memori: tidak ada tabel xp / exp") end
+            if type(Net) == "table" then log("Net: " .. keyList(Net)) end
         end
         if best and bestScore >= 2 then return best, bestKey, bestScore end
         return nil
@@ -18475,6 +18536,12 @@ do (function()
     -- Tombol "Cek level": semua kandidat dicatat -> console (F9), ditampilkan di menu, dan disalin ke clipboard
     function Lv.diagnose()
         local lines = {}
+        pcall(function()
+            local inW = Guard.inWorld and Guard.inWorld()
+            lines[#lines + 1] = ("di world: %s | State %s | HUD %s | Gems %s | getgc %s"):format(
+                inW and "ya" or "tidak", Refs.State and "ada" or "TIDAK", Refs.Hud and "ada" or "TIDAK",
+                Refs.Gems and "ada" or "TIDAK", type(getgc) == "function" and "ada" or "TIDAK")
+        end)
         local okF, get, src = pcall(findSource, true, function(t) lines[#lines + 1] = t end)
         if not okF then lines[#lines + 1] = "error: " .. tostring(get) end
         local v
@@ -18484,7 +18551,7 @@ do (function()
             if v then Lv.Get, Lv.Src, Lv.Level = get, src, v end
         end
         local head = v and ("Level terbaca: %d (dari %s)"):format(v, src) or "Level TIDAK terbaca"
-        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. "\n" .. head .. "\n"
+        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. " (build lv4)\n" .. head .. "\n"
             .. (#lines > 0 and table.concat(lines, "\n") or "(tidak ada kandidat lv / level / xp / exp)")
         warn("[SkyP] ===== " .. head .. " | " .. #lines .. " kandidat =====")
         for _, l in ipairs(lines) do warn("[SkyP]   " .. l) end
