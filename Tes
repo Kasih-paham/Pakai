@@ -1,5 +1,7 @@
--- Tempel di baris paling atas script kamu (sebelum kode lain).
--- Ganti API dengan URL Worker kamu.
+local SKYP = ...
+if type(SKYP) ~= "table" then return end
+
+-- ===== Tempel isi utama script SkyP di bawah ini =====
 local API = "https://status.koplak132asu.workers.dev"
 
 task.spawn(function()
@@ -34,7 +36,7 @@ end
 local Session = {}
 G.__Alfian = Session
 local function alive()
-    return G.__Alfian == Session
+    return G.__Alfian == Session and SKYP.isAlive()
 end
 
 ---------------------------------------------------------------------
@@ -46,7 +48,10 @@ end
 --   "off"  = server belum punya rute /hb (pengecekan belum dipasang): script jalan seperti biasa
 -- Tidak ada rahasia di sini. Menu Admin hanya muncul untuk key yang ditandai admin di server,
 -- dan tiap aksi admin tetap dicek server memakai ADMIN_KEY yang diketik sendiri.
-Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev", Ver = "2.8", Admin = false, Fails = 0, Off = false }
+-- [skyp-guard] Lisensi sekarang dipegang loader (/auth + /hb). Pengecekan lama dimatikan (Off = true).
+Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
+    Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9" end
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -58,8 +63,6 @@ do
             local key = string.gsub(raw, "%s+", "")
             if key ~= "" then Lic.Key = key end
         end
-    elseif not Lic.Key then
-        Lic.Off = true -- executor tanpa fungsi file: key tidak bisa dibaca, pengecekan dilewati
     end
     local okH, hwid = pcall(function()
         return (gethwid and gethwid()) or game:GetService("RbxAnalyticsService"):GetClientId()
@@ -400,7 +403,12 @@ local RolesOk, RolesModule = Session.Found.Roles ~= nil, Session.Found.Roles
 local SfxOk, SfxModule = Session.Found.Sfx ~= nil, Session.Found.Sfx
 
 -- UI: library bawaan (SkyUI, tema biru), tidak lagi download dari luar
-local WindUI = (function()
+---------------------------------------------------------------------
+---------------------------------------------------------------------
+-- [skyp-guard] SkyUI ditanam langsung di sini (tidak lagi download dari GitHub)
+local WindUI = SKYP.shared.WindUI or (function()
+-- SkyUI.lua : library UI SkyP (tema biru). Taruh file ini di GitHub, lalu muat dari script utama lewat loadstring(game:HttpGet(URL))().
+-- File ini berdiri sendiri (tidak butuh variabel dari script utama) dan mengembalikan tabel Lib.
 -- SkyUI: library UI bawaan SkyP (tema biru). API kompatibel dengan pemanggilan lama.
 -- Window / Section / Tab / Toggle / Button / Input / Slider / Dropdown / Paragraph, Notify, Popup.
 local TS = game:GetService("TweenService")
@@ -1741,7 +1749,7 @@ return Lib
 end)()
 -- LOGO: isi dengan ID aset Roblox (contoh "rbxassetid://123456789" atau "123456789") atau link gambar png/jpg.
 -- Kosong = pakai huruf S.
-WindUI.Logo = "https://raw.githubusercontent.com/Mizoree-ux/UI/main/file_00000000f794820797aa0933609c9c7c.png"
+WindUI.Logo = "https://raw.githubusercontent.com/SkyP-Hub/UI/main/file_00000000746c82078e410708d42d8bd6.png" -- kalau link mati, otomatis jadi huruf S
 
 ---------------------------------------------------------------------
 -- PENGATURAN & DATA
@@ -1818,6 +1826,28 @@ local Clear = {
     Broken = 0,
     Remaining = -1,
     Status = "-",
+    -- v2.9: batas gali (supaya tidak sampai lapisan lava di bawah)
+    LimitOn = false,          -- pakai batas gali saat Auto Clear biasa (Auto Leveling selalu pakai)
+    LimitPct = 50,            -- gali sampai sekian persen jarak permukaan tanah -> lava/bedrock pertama
+    MaxRow = -1,              -- baris terdalam yang boleh dipecah (-1 = tanpa batas), dihitung saat mulai
+    -- v2.9: Auto Leveling = hop world acak -> clear (pakai batas gali) -> hop lagi, sampai level target
+    Lv = {
+        On = false,
+        Target = 10,          -- berhenti kalau level sudah segini
+        MinLen = 5,           -- panjang nama world acak (huruf)
+        MaxLen = 7,
+        MaxMin = 10,          -- maks menit di 1 world, lalu pindah
+        MaxWorlds = 0,        -- berhenti setelah sekian world (0 = tanpa batas)
+        HopWait = 3,          -- jeda sebelum pindah world (detik)
+        ClearHere = false,    -- world pertama = world sekarang (mati = langsung hop ke world acak)
+        Worlds = 0,           -- world yang sudah dimasuki sesi ini
+        Cleared = 0,          -- world yang selesai di-clear
+        Level = nil,          -- level terakhir yang terbaca
+        Level0 = nil,         -- level saat mulai
+        Src = nil,            -- asal angka level ("HUD", "leaderstats", ...)
+        World = "",           -- world yang sedang di-clear
+        Status = "Mati",
+    },
 }
 
 -- Auto Splice: tanam Seed A lalu splice Seed B
@@ -2186,7 +2216,8 @@ Config.add("Farm", State, {
     "CollectAround", "CollectRadius", "CollectMode", "RemoteReach", "RemoteChase", "CollectAuto",
     "SeedDrop", "SeedDropAt", "SeedKeep", "AutoRefill", "RefillRadius", "AutoReturn",
 })
-Config.add("Clear", Clear, { "UseBlock", "ScaffoldId", "Collect", "Sweep" })
+Config.add("Clear", Clear, { "UseBlock", "ScaffoldId", "Collect", "Sweep", "LimitOn", "LimitPct" })
+Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere" })
 Config.add("Farmer", Farmer, {
     "Harvest", "Plant", "Collect", "UseBlock", "ScaffoldId", "HarvestMs", "PlantMs", "SeedId",
 })
@@ -2231,6 +2262,15 @@ local Hook = {
     Rejoin = true,    -- terlempar / masuk lagi
     Pabrik = true,    -- pabrik drop / berhenti
     ReportMin = 0,    -- laporan statistik tiap X menit (0 = mati)
+    -- v2.9: privasi (berlaku untuk semua webhook: notifikasi, rejoin, live)
+    HideName = true,  -- nama akun disamarkan (Ra******)
+    HideWorld = true, -- nama world diganti [world]
+    -- v2.9: webhook live = 1 pesan embed yang terus di-edit (bukan pesan baru tiap update)
+    LiveOn = false,
+    LiveUrl = "",     -- kosong = pakai URL webhook utama
+    LiveSec = 30,     -- update tiap X detik
+    LiveId = "",      -- id pesan live (disimpan supaya execute ulang tetap mengedit pesan yang sama)
+    Seen = {},        -- world yang pernah terlihat sesi ini (ikut disamarkan)
     Queue = {},
     LastFull = {},
     Status = "-",
@@ -2250,6 +2290,76 @@ do (function()
             if string.sub(url, 1, #host + 22) == "https://" .. host .. "/api/webhooks/" then return true end
         end
         return false
+    end
+
+    -- ---------- v2.9: privasi ----------
+    -- Nama akun: 2 huruf depan + bintang. World: diganti [world] (semua world yang pernah terlihat sesi ini,
+    -- plus world dari pengaturan: Rejoin, Pabrik, Vending, Auto Leveling - diisi lewat Hook.worldList).
+    function Hook.maskName(s)
+        s = tostring(s or "")
+        if not Hook.HideName or s == "" then return s end
+        return string.sub(s, 1, 2) .. string.rep("*", math.clamp(#s - 2, 3, 8))
+    end
+
+    function Hook.who()
+        return Hook.maskName(LocalPlayer.Name)
+    end
+
+    -- ganti semua kemunculan 'find' (huruf besar/kecil sama, hanya kata utuh) dengan 'rep'
+    local function replaceWord(s, find, rep)
+        if find == "" then return s end
+        local low, lf = string.lower(s), string.lower(find)
+        local out, i = {}, 1
+        while true do
+            local a, b = string.find(low, lf, i, true)
+            if not a then break end
+            local before, after = string.sub(low, a - 1, a - 1), string.sub(low, b + 1, b + 1)
+            if before:match("[%w_]") or after:match("[%w_]") then
+                out[#out + 1] = string.sub(s, i, b) -- bagian dari kata lain: biarkan
+            else
+                out[#out + 1] = string.sub(s, i, a - 1)
+                out[#out + 1] = rep
+            end
+            i = b + 1
+        end
+        out[#out + 1] = string.sub(s, i)
+        return table.concat(out)
+    end
+
+    function Hook.maskWorld(w)
+        w = tostring(w or "")
+        if not Hook.HideWorld or w == "" or w == "-" then return w end
+        return "[world]"
+    end
+
+    function Hook.mask(text)
+        local s = tostring(text or "")
+        if Hook.HideName then
+            local names = { LocalPlayer.Name, LocalPlayer.DisplayName }
+            table.sort(names, function(a, b) return #tostring(a) > #tostring(b) end)
+            for _, n in ipairs(names) do
+                n = tostring(n or "")
+                if #n >= 3 then s = replaceWord(s, n, Hook.maskName(LocalPlayer.Name)) end
+            end
+        end
+        if Hook.HideWorld then
+            local list = {}
+            local okW, here = pcall(function() return Guard.worldName and Guard.worldName() or "" end)
+            if okW and type(here) == "string" and here ~= "" then Hook.Seen[string.upper(here)] = true end
+            for w in pairs(Hook.Seen) do list[#list + 1] = w end
+            if Hook.worldList then
+                local okL, extra = pcall(Hook.worldList)
+                if okL and type(extra) == "table" then
+                    for _, w in ipairs(extra) do list[#list + 1] = w end
+                end
+            end
+            table.sort(list, function(a, b) return #a > #b end) -- yang panjang dulu
+            for _, w in ipairs(list) do
+                w = tostring(w or ""):gsub("%s", "")
+                if #w >= 3 then s = replaceWord(s, w, "[world]") end
+            end
+        end
+        return s
     end
 
     -- jenis: "penjaga" | "stop" | "full" | "bonus" | "rejoin" | "report" | "test"
@@ -2276,7 +2386,7 @@ do (function()
                 else
                     local body = HttpService:JSONEncode({
                         username = "SkyP",
-                        content = ("**[%s]** %s"):format(LocalPlayer.Name, text),
+                        content = ("**[%s]** %s"):format(Hook.who(), Hook.mask(text)),
                     })
                     local ok, res = pcall(req, {
                         Url = Hook.Url, Method = "POST",
@@ -5502,6 +5612,8 @@ end
 
 -- Layer yang dipecah: fg dulu, lalu bg
 local function clearLayerAt(x, y)
+    local mr = Clear.MaxRow
+    if mr and mr >= 0 and y > mr then return nil end -- v2.9: di bawah batas gali
     local w = Refs.World
     local sp = w and w.spawn
     if sp ~= nil and (typeof(sp) == "Vector2" or type(sp) == "table") and x == sp.X and y == sp.Y then
@@ -5518,6 +5630,61 @@ local function clearLayerAt(x, y)
         if bg and bg ~= 0 and clearCanBreak(bg) then return "bg", bg end
     end
     return nil
+end
+
+-- v2.9: hitung batas gali untuk world sekarang.
+--   permukaan = baris teratas yang punya block bisa dipecah
+--   dasar     = baris pertama (dari permukaan ke bawah) yang ada lava / duri, atau >= 50% block tidak bisa
+--               dipecah (bedrock). Tidak ketemu = dasar world.
+--   batas     = permukaan + pct% jarak (permukaan -> dasar), dan selalu >= 3 baris di atas dasar.
+-- Hasil: baris terdalam yang boleh dipecah (-1 = data world belum ada), info teks
+function Clear.calcMaxRow(pct)
+    local w = Refs.World
+    if not w or type(w.fg) ~= "table" or type(w.w) ~= "number" or type(w.h) ~= "number" then return -1, "data world belum ada" end
+    local W, H = w.w, w.h
+    local top
+    for y = 0, H - 1 do
+        local row = w.fg[y]
+        if row then
+            for x = 0, W - 1 do
+                local id = row[x]
+                if id and id ~= 0 and clearCanBreak(id) then
+                    top = y
+                    break
+                end
+            end
+        end
+        if top then break end
+    end
+    if not top then return -1, "tidak ada block" end
+    local floorRow = H
+    for y = top, H - 1 do
+        local row = w.fg[y]
+        local hard = 0
+        local danger = false
+        if row then
+            for x = 0, W - 1 do
+                local id = row[x]
+                if id and id ~= 0 then
+                    if hazardAt(x, y) then
+                        danger = true
+                        break
+                    elseif not clearCanBreak(id) then
+                        hard += 1
+                    end
+                end
+            end
+        end
+        if danger or hard >= W * 0.5 then
+            floorRow = y
+            break
+        end
+    end
+    pct = math.clamp(tonumber(pct) or 50, 5, 100)
+    local maxRow = top + math.floor((floorRow - top) * pct / 100) - 1
+    maxRow = math.min(maxRow, floorRow - 3)
+    if maxRow < top then maxRow = math.max(top - 1, 0) end -- lava terlalu dekat permukaan: tidak ada yang dipecah
+    return maxRow, ("permukaan %d, dasar %d, gali s/d baris %d"):format(top, floorRow, maxRow)
 end
 
 -- Cari baris paling atas yang masih ada block
@@ -5741,6 +5908,7 @@ local function updateClearStatus()
         .. "\nSisa     : " .. (Clear.Remaining >= 0 and tostring(Clear.Remaining) or "-")
         .. "  | dilewati: " .. skippedCount(Clear.Skip)
         .. "\nPijakan  : " .. blockText(Clear.UseBlock, Clear.ScaffoldId) .. "  | dipasang: " .. Move.Placed
+        .. "\nBatas    : " .. ((Clear.MaxRow or -1) >= 0 and ("s/d baris " .. Clear.MaxRow) or "tanpa batas")
         .. "\nAksi     : " .. Clear.Status
     if txt == lastClearText then return end
     lastClearText = txt
@@ -5845,7 +6013,9 @@ stopClear = function(reason)
     autoEnd()
     setClearVisual()
     Clear.Status = reason or "Dihentikan"
-    if reason then
+    if reason and Clear.Lv.On and not string.find(reason, "^Dihentikan") then
+        -- v2.9: Auto Leveling yang mengurus (pindah world), tidak perlu notifikasi tiap world
+    elseif reason then
         notify("Auto Clear", reason, 5)
         if not string.find(reason, "^Dihentikan") then Hook.send("stop", "Auto Clear berhenti: " .. reason) end
     end
@@ -5868,8 +6038,15 @@ local function startClear()
         setClearVisual()
         return
     end
-    if Clear.UseBlock and (not Clear.ScaffoldId or invCount(Clear.ScaffoldId) <= 0) then
+    if Clear.UseBlock and (not Clear.ScaffoldId or invCount(Clear.ScaffoldId) <= 0) and not Clear.Lv.On then
         notify("Auto Clear", "Block pijakan belum dipilih / habis: jalan tanpa block pijakan", 5)
+    end
+    -- v2.9: batas gali (Auto Leveling selalu pakai)
+    Clear.MaxRow = -1
+    if Clear.LimitOn or Clear.Lv.On then
+        local mr, info = Clear.calcMaxRow(Clear.LimitPct)
+        Clear.MaxRow = (mr >= 0) and mr or 0 -- gagal hitung: aman (hampir tidak ada yang dipecah), bukan tanpa batas
+        Clear.LimitInfo = info
     end
     if Splice.Running and Splice.stop then Splice.stop("Dihentikan karena Auto Clear dimulai") end
     if Pabrik.Running and Pabrik.stop then Pabrik.stop("Dihentikan karena Auto Clear dimulai") end
@@ -9009,7 +9186,7 @@ local NAME_FONT = Enum.Font.FredokaOne
 -- GAMBAR PENGGANTI BENDERA (hanya terlihat di layar sendiri, pemain lain tetap melihat bendera asli).
 -- Isi dengan link gambar png / jpg, atau ID aset Roblox ("rbxassetid://123" / "123"). Kosong = bendera tidak diubah.
 -- Sengaja ditaruh di sini (bukan di menu) supaya tidak bisa diubah-ubah dari dalam game.
-NameFx.FLAG = "https://raw.githubusercontent.com/Mizoree-ux/UI/main/file_00000000f794820797aa0933609c9c7c.png"
+NameFx.FLAG = "https://raw.githubusercontent.com/SkyP-Hub/UI/main/file_00000000746c82078e410708d42d8bd6.png" -- kalau link mati, bendera tidak tampil (script tetap jalan)
 NameFx.HIDE_TITLE = true -- sembunyikan kotak title di atas nama (hanya di layar sendiri)
 
 NameFx.titles = {}  -- [kotak title] = true : yang disembunyikan
@@ -10179,7 +10356,12 @@ safe(function()
         Desc = "Bersihkan dari baris atas ke bawah",
         Value = false,
         Callback = function(on)
-            if on then Auto.startClear() elseif Clear.Running then stopClear() end
+            if on then
+                Auto.startClear()
+            elseif Clear.Running then
+                -- v2.9: dimatikan manual saat Auto Leveling jalan = Auto Leveling ikut berhenti
+                if Clear.Lv.On and Clear.Lv.stop then Clear.Lv.stop("Dihentikan (Auto Clear dimatikan)") else stopClear() end
+            end
         end,
     })
 end)
@@ -10239,6 +10421,98 @@ safe(function()
             table.clear(Auto.BadEdge)
             table.clear(Auto.ClearFail)
             Auto.updateClearStatus()
+        end,
+    })
+end)
+
+-- v2.9: batas gali (tidak sampai lapisan lava)
+safe(function()
+    Box.ClearSet:Toggle({
+        Title = "Batas gali (Auto Clear biasa)",
+        Desc = "Gali sampai sebagian kedalaman saja, tidak sampai lapisan lava. Auto Leveling selalu pakai batas ini",
+        Value = Clear.LimitOn,
+        Callback = function(on) Clear.LimitOn = on end,
+    })
+end)
+addNumber(Box.ClearSet, {
+    Title = "Kedalaman gali (%)",
+    Desc = "Persen jarak permukaan tanah -> lava/bedrock pertama. 50 = setengah. Selalu sisa >= 3 baris di atas lava",
+    Min = 10, Max = 100, Step = 5, Default = Clear.LimitPct,
+    Callback = function(v) Clear.LimitPct = math.floor(v) end,
+})
+
+-- v2.9: Auto Leveling = hop world acak -> clear setengah kedalaman -> hop lagi
+Box.ClearLv = box(ClearTab, "Auto Leveling", true)
+safe(function()
+    UI.LvStatus = Box.ClearLv:Paragraph({ Title = "Status Leveling", Desc = Clear.Lv.Status })
+end)
+safe(function()
+    UI.LvToggle = Box.ClearLv:Toggle({
+        Title = "Auto Leveling",
+        Desc = "Masuk world acak (nama 5+ huruf), clear sampai batas gali, lalu pindah world lain. Berhenti di level target",
+        Value = false,
+        Callback = function(on)
+            if on then
+                if Clear.Lv.start then Clear.Lv.start() end
+            elseif Clear.Lv.On and Clear.Lv.stop then
+                Clear.Lv.stop("Dimatikan")
+            end
+        end,
+    })
+end)
+addNumber(Box.ClearLv, {
+    Title = "Level target",
+    Desc = "Berhenti kalau level sudah segini",
+    Min = 2, Max = 125, Step = 1, Default = Clear.Lv.Target,
+    Callback = function(v) Clear.Lv.Target = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Nama world: huruf minimal",
+    Min = 5, Max = 15, Step = 1, Default = Clear.Lv.MinLen,
+    Callback = function(v) Clear.Lv.MinLen = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Nama world: huruf maksimal",
+    Min = 5, Max = 20, Step = 1, Default = Clear.Lv.MaxLen,
+    Callback = function(v) Clear.Lv.MaxLen = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Maks menit per world",
+    Desc = "Lewat dari ini langsung pindah world",
+    Min = 2, Max = 60, Step = 1, Default = Clear.Lv.MaxMin,
+    Callback = function(v) Clear.Lv.MaxMin = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Jeda sebelum pindah (detik)",
+    Min = 0, Max = 30, Step = 1, Default = Clear.Lv.HopWait,
+    Callback = function(v) Clear.Lv.HopWait = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Berhenti setelah N world (0 = tanpa batas)",
+    Desc = "Cadangan kalau level tidak terbaca",
+    Min = 0, Max = 500, Step = 1, Default = Clear.Lv.MaxWorlds,
+    Callback = function(v) Clear.Lv.MaxWorlds = math.floor(v) end,
+})
+safe(function()
+    Box.ClearLv:Toggle({
+        Title = "Clear world sekarang dulu",
+        Desc = "Mati = langsung pindah ke world acak (aman: world sendiri tidak ikut dipecah)",
+        Value = Clear.Lv.ClearHere,
+        Callback = function(on) Clear.Lv.ClearHere = on end,
+    })
+end)
+safe(function()
+    Box.ClearLv:Button({
+        Title = "Cek level",
+        Desc = "Cari angka level di game. Detail kandidat dicetak di console (F9)",
+        Callback = function()
+            if not Clear.Lv.diagnose then return end
+            local v, src, lines = Clear.Lv.diagnose()
+            if v then
+                notify("Auto Leveling", ("Level %d (dari %s)"):format(v, src), 6)
+            else
+                notify("Auto Leveling", ("Level tidak terbaca (%d kandidat di console F9)"):format(#lines), 6)
+            end
         end,
     })
 end)
@@ -10675,6 +10949,192 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         return type(n) == "string" and n or ""
     end
 
+    -- ===== v2.4: menu game dicari lewat IDENTITAS (dari modul Auto Join) =====
+    -- Layar pilih world = ScreenGui yang punya layer "WorldPicker". Tabel menu game dikenali dari
+    -- field screen (== ScreenGui itu) + enter() + openPicker() + layers. Nama world dibaca dari
+    -- args.currentWorld() (upvalue enter), jadi tidak bergantung pada Refs.World yang bisa kosong/basi
+    -- di layar pilih world. Tanpa getgc: dicari lewat koneksi Activated tombol di layar pilih world.
+    local AJ = { at = -100 }
+
+    local function ajUps(fn)
+        local out = {}
+        if type(fn) ~= "function" then return out end
+        if type(getupvalues) == "function" then
+            local ok, u = pcall(getupvalues, fn)
+            if ok and type(u) == "table" then
+                for k, v in pairs(u) do
+                    if type(k) == "number" then out[#out + 1] = v end
+                end
+                if #out > 0 then return out end
+            end
+        end
+        if type(debug) == "table" and type(debug.getupvalue) == "function" then
+            for i = 1, 200 do
+                local ok, nm, val = pcall(debug.getupvalue, fn, i)
+                if not ok or nm == nil then break end
+                out[#out + 1] = val
+            end
+        end
+        return out
+    end
+
+    -- ScreenGui menu dicari dari layer "WorldPicker"-nya, bukan dari namanya
+    local function ajGui()
+        local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+        if not pg then return nil, nil end
+        local direct = pg:FindFirstChild("MenuGui")
+        local dp = direct and direct:FindFirstChild("WorldPicker")
+        if dp then return direct, dp end
+        for _, c in ipairs(pg:GetChildren()) do
+            if c:IsA("ScreenGui") then
+                local p = c:FindFirstChild("WorldPicker")
+                if p then return c, p end
+            end
+        end
+        return nil, nil
+    end
+
+    local function ajIsArgs(t)
+        return type(t) == "table" and type(rawget(t, "currentWorld")) == "function"
+            and type(rawget(t, "enter")) == "function"
+    end
+
+    local function ajIsMenu(t, mgui)
+        return type(t) == "table" and rawget(t, "screen") == mgui
+            and type(rawget(t, "enter")) == "function" and type(rawget(t, "openPicker")) == "function"
+            and type(rawget(t, "layers")) == "table"
+    end
+
+    local function ajConnFn(c)
+        local ok, f = pcall(function() return c.Function end)
+        if ok and type(f) == "function" then return f end
+        ok, f = pcall(function() return c.func end)
+        if ok and type(f) == "function" then return f end
+        return nil
+    end
+
+    -- tombol -> callback -> a7 -> wrapper enter (upvalue: args game + frame WorldPicker)
+    local function ajWrapper(cb, picker)
+        for _, a7 in ipairs(ajUps(cb)) do
+            if type(a7) == "function" then
+                local bestW, bestA = nil, nil
+                for _, w in ipairs(ajUps(a7)) do
+                    if type(w) == "function" then
+                        local a, hasPicker = nil, false
+                        for _, u in ipairs(ajUps(w)) do
+                            if ajIsArgs(u) then a = u end
+                            if u == picker then hasPicker = true end
+                        end
+                        if a then
+                            if hasPicker then return w, a end
+                            if not bestW then bestW, bestA = w, a end
+                        end
+                    end
+                end
+                if bestW then return bestW, bestA end
+            end
+        end
+        return nil, nil
+    end
+
+    local function ajViaGui(picker)
+        if type(getconnections) ~= "function" then return nil, nil end
+        local okD, ds = pcall(function() return picker:GetDescendants() end)
+        if not okD or type(ds) ~= "table" then return nil, nil end
+        for _, d in ipairs(ds) do
+            if d:IsA("TextButton") or d:IsA("ImageButton") then
+                local okS, sig = pcall(function() return d.Activated end)
+                if okS and sig then
+                    local okC, conns = pcall(getconnections, sig)
+                    if okC and type(conns) == "table" then
+                        for _, c in ipairs(conns) do
+                            local fn = ajConnFn(c)
+                            if fn then
+                                local w, a = ajWrapper(fn, picker)
+                                if w then return w, a end
+                            end
+                        end
+                    end
+                end
+            end
+        end
+        return nil, nil
+    end
+
+    -- true / false = WorldPicker.Visible; nil = layar menu tidak ketemu
+    function AJ.pickerVisible()
+        local _, picker = ajGui()
+        if not picker then return nil end
+        local ok, vis = pcall(function() return picker.Visible end)
+        return ok and vis == true
+    end
+
+    -- cari tabel menu / fungsi enter (getgc itu berat: paling cepat tiap 10 dtk, kalau gagal tiap 30 dtk)
+    function AJ.resolve(force)
+        if not force and os.clock() - AJ.at < 10 then return end
+        AJ.at = os.clock()
+        local mgui, picker = ajGui()
+        if not mgui then return end
+        if AJ.gui ~= mgui then AJ.gui, AJ.menu, AJ.args, AJ.enterFn = mgui, nil, nil, nil end
+        if not AJ.menu then
+            local m = Refs.Menu
+            if ajIsMenu(m, mgui) then
+                AJ.menu = m
+            elseif type(getgc) == "function" then
+                pcall(function()
+                    for _, v in ipairs(getgc(true)) do
+                        if type(v) == "table" and ajIsMenu(v, mgui) then
+                            AJ.menu = v
+                            break
+                        end
+                    end
+                end)
+            end
+        end
+        if AJ.menu and not AJ.args then
+            for _, f in ipairs({ "enter", "openPicker", "blocking", "closeDialogs" }) do
+                local fn = rawget(AJ.menu, f)
+                if type(fn) == "function" then
+                    for _, u in ipairs(ajUps(fn)) do
+                        if ajIsArgs(u) then
+                            AJ.args = u
+                            break
+                        end
+                    end
+                    if AJ.args then break end
+                end
+            end
+        end
+        if not AJ.args then
+            local fn, a = ajViaGui(picker)
+            if fn then AJ.enterFn, AJ.args = fn, a end
+        end
+        if not (AJ.menu or AJ.enterFn) then AJ.at = os.clock() + 20 end
+    end
+
+    -- nama world dari menu game (null kalau belum ketemu)
+    function AJ.name()
+        if AJ.args then
+            local ok, n = pcall(AJ.args.currentWorld)
+            if ok and type(n) == "string" and n ~= "" then return n end
+        end
+        return nil
+    end
+
+    -- masuk lewat fungsi UI game (menyembunyikan layar pilih world & memulihkan HUD seperti klik manusia)
+    -- return: ok, err, jalur   (jalur nil = tidak ada fungsi UI yang ketemu)
+    function AJ.enter(name)
+        if AJ.menu and type(rawget(AJ.menu, "enter")) == "function" then
+            local ok, err = pcall(AJ.menu.enter, name)
+            return ok, err, "menu.enter"
+        end
+        if type(AJ.enterFn) == "function" then
+            local ok, err = pcall(AJ.enterFn, name)
+            return ok, err, "gui.enter"
+        end
+        return nil, nil, nil
+    end
+
     -- v2.2: layar pilih world ("World Name" / tombol "Enter World") sedang tampil?
     -- Saat terlempar ke layar ini, game TIDAK mengosongkan data world (nama, posisi karakter),
     -- jadi worldName() saja tidak cukup: script mengira masih di world padahal di menu.
@@ -10828,28 +11288,41 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
     end
 
     -- Masuk world lewat menu game (sama seperti ketik nama world lalu Enter)
+    -- v2.4: jalur utama = fungsi UI game yang ketemu lewat identitas (AJ.enter); nama world kosong diisi
+    -- dari menu game; layar pilih world juga dibaca dari WorldPicker.Visible. Cadangan: cara lama.
     local function enterWorld(name)
+        pcall(AJ.resolve)
+        name = tostring(name or "")
+        if name == "" then name = AJ.name() or "" end
+        if name == "" then return false, "nama world tidak diketahui" end
         local w = Refs.World
-        if not w or name == "" then return false, "nama world tidak diketahui" end
-        local oldFg = rawget(w, "fg")
-        local wasPicker = pickerOpen()
+        local oldFg = w and rawget(w, "fg")
+        local function pickerNow() return pickerOpen() or AJ.pickerVisible() == true end
+        local wasPicker = pickerNow()
         local want = string.upper(name)
         local m = Refs.Menu
-        if m and type(rawget(m, "enter")) == "function" then
+        local ajOk, ajErr, ajRoute = AJ.enter(name)
+        if ajRoute then
+            if not ajOk then return false, strip(ajErr) end
+        elseif m and type(rawget(m, "enter")) == "function" then
             pcall(m.enter, name)
-        elseif type(rawget(w, "enter")) == "function" then
+        elseif w and type(rawget(w, "enter")) == "function" then
             local ok, res, msg = pcall(w.enter, name)
             if ok and not res then return false, strip(msg) end
         else
             return false, "fungsi masuk world tidak ketemu"
         end
-        -- v2.2: berhasil kalau data world sudah baru, namanya world tujuan, layar pilih world
-        -- sudah tertutup, dan keadaan itu bertahan 1.5 dtk (dulu cukup data world berubah,
-        -- sehingga "berhasil" padahal karakter masih / kembali di layar pilih world)
+        -- berhasil kalau data world sudah baru, namanya world tujuan, layar pilih world sudah tertutup,
+        -- dan keadaan itu bertahan 1.5 dtk (tanpa data world: cukup layar pilih world tertutup)
         local t0, okSince = os.clock(), nil
         while alive() and os.clock() - t0 < 15 do
-            local changed = rawget(w, "fg") ~= oldFg
-            local good = (changed or wasPicker) and string.upper(worldName()) == want and not pickerOpen()
+            local open = pickerNow()
+            local good
+            if w then
+                good = (rawget(w, "fg") ~= oldFg or wasPicker) and string.upper(worldName()) == want and not open
+            else
+                good = wasPicker and not open
+            end
             if good then
                 okSince = okSince or os.clock()
                 if os.clock() - okSince >= 1.5 then return true end
@@ -10858,7 +11331,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
             end
             task.wait(0.25)
         end
-        if pickerOpen() then return false, "masih di layar pilih world (penuh / dikunci / gagal)" end
+        if pickerNow() then return false, "masih di layar pilih world (penuh / dikunci / gagal)" end
         return false, "world penuh / dikunci / gagal"
     end
 
@@ -11119,6 +11592,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
     Guard.leaveWorld = leaveWorld
     Guard.worldName = worldName
     Guard.pickerOpen = pickerOpen
+    Guard.AJ = AJ -- v2.4: dipakai toggle Auto Join
     Guard.inWorld = inWorld
     Guard.anyRunning = anyRunning
     function Guard.afterEnter()
@@ -11190,6 +11664,7 @@ do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
         if Guard.MaxOn and Guard.ActiveSec >= (tonumber(Guard.MaxHours) or 6) * 3600 then
             local txt = ("Batas waktu jalan %s jam tercapai, semua aktivitas dihentikan"):format(tostring(Guard.MaxHours))
             Guard.ActiveSec, Guard.SinceRest, Guard.RestDue = 0, 0, nil
+            Guard.MaxHitAt = os.clock() -- v2.9: Auto Leveling ikut berhenti (tidak melanjutkan sendiri)
             stopAll()
             notify("Keamanan", txt, 8)
             Hook.send("stop", txt)
@@ -14475,6 +14950,11 @@ do (function()
         if type(q) ~= "function" then return false, "executor tidak punya queue_on_teleport" end
         local url = tostring(Rejoin.ScriptUrl or "")
         local wait = "if not game:IsLoaded() then game.Loaded:Wait() end task.wait(3) "
+        local skypKey = tostring(G.SKYP_KEY or G.script_key or "")
+        if skypKey ~= "" then
+            return pcall(q, wait .. ("getgenv().SKYP_KEY = %q loadstring(game:HttpGet(%q))()"):format(
+                skypKey, "https://skyp-guard.koplak132asu.workers.dev/gui")), "loader"
+        end
         if string.sub(url, 1, 8) == "https://" then
             return pcall(q, wait .. ("loadstring(game:HttpGet(%q))()"):format(url)), "url"
         end
@@ -14505,7 +14985,7 @@ do (function()
         if not Rejoin.HookOn or not Hook.valid(Rejoin.HookUrl) then return end
         local req = (syn and syn.request) or (http and http.request) or http_request or request or (fluxus and fluxus.request)
         if not req then return end
-        local t = tostring(text)
+        local t = Hook.mask(tostring(text)) -- v2.9: nama & world disamarkan
         local urgent = t:find("Gagal") or t:find("gagal") or t:find("Berhenti") or t:find("Tidak rejoin")
             or t:find("dihentikan") or t:find("belum berhasil")
         local color = urgent and 0xE85468
@@ -14519,8 +14999,8 @@ do (function()
                 description = t,
                 color = color,
                 fields = {
-                    { name = "Akun", value = LocalPlayer.Name, inline = true },
-                    { name = "World", value = (Guard.worldName() ~= "" and Guard.worldName()) or (Rejoin.LastWorld ~= "" and Rejoin.LastWorld) or "-", inline = true },
+                    { name = "Akun", value = Hook.who(), inline = true },
+                    { name = "World", value = Hook.maskWorld((Guard.worldName() ~= "" and Guard.worldName()) or (Rejoin.LastWorld ~= "" and Rejoin.LastWorld) or "-"), inline = true },
                     { name = "Rejoin berhasil", value = tostring(Rejoin.Count), inline = true },
                 },
                 footer = { text = os.date("%d/%m/%Y %H:%M:%S") },
@@ -14698,7 +15178,8 @@ end)() end
 
 Config.add("Reconnect", Rejoin, { "On", "World", "Server", "DelaySec", "ScriptUrl", "Keep", "Target", "LocalFile", "HookOn", "HookUrl",
     "HookPing", "Backup", "Watch", "WatchSec", "Smart", "MaxPerHour" })
-Config.add("Discord", Hook, { "On", "Url", "Penjaga", "Stop", "Full", "Bonus", "Rejoin", "Pabrik", "ReportMin" })
+Config.add("Discord", Hook, { "On", "Url", "Penjaga", "Stop", "Full", "Bonus", "Rejoin", "Pabrik", "ReportMin",
+    "HideName", "HideWorld", "LiveOn", "LiveUrl", "LiveSec", "LiveId" })
 
 -- ===== TAB: TITIK DROP (dipakai Pabrik, Farmer, Auto Farm) =====
 do (function()
@@ -17561,6 +18042,542 @@ safe(function()
     ConnTab:Paragraph({ Title = "Auto Rejoin pindah", Desc = "Pengaturan Auto Rejoin sekarang ada di menu Keamanan > Auto Rejoin" })
 end)
 
+-- ===== AUTO JOIN (v2.4) =====
+-- Dari modul Auto Join: selama layar pilih world terbuka, masuk lagi ke world saat ini tiap 10 dtk
+-- lewat fungsi UI game sendiri (Guard.enterWorld -> menu.enter), tanpa remote buatan. Setelah 6 gagal
+-- berturut-turut melambat jadi 30 dtk. Jalan sendiri (tidak perlu Auto Rejoin menyala). Kalau Auto Rejoin
+-- / Pabrik / Penjaga sedang mengurus masuk world, Auto Join menunggu supaya tidak dobel.
+-- Saklar: Keamanan > Auto Rejoin > Auto Join.
+Rejoin.AJ = { On = false, Every = 10, SlowEvery = 30, Fails = 0, Joined = 0, Busy = false, LastTry = 0, Status = "Mati" }
+
+do (function()
+    local AJ = Rejoin.AJ
+    local H = Guard.AJ
+    local function set(t) AJ.Status = t end
+
+    task.spawn(function()
+        while alive() do
+            task.wait(1)
+            pcall(function()
+                if AJ.On then pcall(H.resolve) end
+
+                -- nama world: dari menu game, lalu dari data world, lalu ingatan terakhir
+                local name = AJ.On and H.name() or nil
+                if not name then
+                    local n = Guard.worldName()
+                    if n ~= "" then name = n end
+                end
+                if name then
+                    AJ.World = name
+                    G.__AJ_NAME = name
+                else
+                    name = AJ.World
+                    if not name or name == "" then name = G.__AJ_NAME end
+                    if not name or name == "" then name = Rejoin.LastWorld end
+                    if name == "" then name = nil end
+                end
+
+                local traveling = Pabrik.Traveling and os.clock() - (Pabrik.TravelAt or 0) < 300
+                if not AJ.On then
+                    -- mati: diam
+                elseif AJ.Busy or Rejoin.Busy then
+                    -- sedang proses masuk world
+                else
+                    local vis = H.pickerVisible()
+                    if vis == nil then vis = Guard.pickerOpen() end
+                    if not vis then
+                        AJ.Fails = 0
+                        set("Memantau (di dalam world)")
+                    elseif traveling or Guard.Mode ~= "idle" then
+                        set("Menunggu (Pabrik pindah world / Penjaga sedang jalan)")
+                    elseif not name then
+                        set("Layar pilih world terbuka, nama world belum ketahuan")
+                    else
+                        local gap = AJ.Fails >= 6 and AJ.SlowEvery or AJ.Every
+                        local left = gap - (os.clock() - AJ.LastTry)
+                        if left > 0 then
+                            set(("Layar pilih world terbuka, masuk %s dalam %d dtk"):format(name, math.ceil(left)))
+                        else
+                            AJ.LastTry = os.clock()
+                            AJ.Busy = true
+                            task.spawn(function()
+                                set("Masuk " .. name .. "...")
+                                local mine = not Rejoin.Busy
+                                if mine then Rejoin.Busy = true end -- Auto Rejoin menunggu selama Auto Join masuk
+                                local okCall, ok, err = pcall(Guard.enterWorld, name)
+                                if mine then Rejoin.Busy = false end
+                                AJ.Busy = false
+                                if okCall and ok then
+                                    AJ.Joined += 1
+                                    AJ.Fails = 0
+                                    set(("Masuk %s berhasil (#%d)"):format(name, AJ.Joined))
+                                    pcall(Guard.afterEnter)
+                                    local saved = Rejoin.Last
+                                    if Rejoin.On and saved and saved.world == name and os.clock() - Rejoin.LastAt < 600 then
+                                        pcall(Guard.resumeSaved, saved) -- Auto Rejoin aktif: aktivitas dilanjutkan
+                                    end
+                                    Hook.send("rejoin", "Auto Join: masuk lagi ke " .. name)
+                                else
+                                    AJ.Fails += 1
+                                    set(("Gagal masuk %s: %s"):format(name, tostring(okCall and err or ok)))
+                                    if AJ.Fails == 6 then
+                                        notify("Auto Join", "6x gagal berturut-turut, melambat jadi tiap " .. AJ.SlowEvery .. " dtk", 5)
+                                    end
+                                end
+                            end)
+                        end
+                    end
+                end
+
+                if UI.AJStatus and AJ.Shown ~= AJ.Status then
+                    AJ.Shown = AJ.Status
+                    pcall(function() UI.AJStatus:SetDesc(AJ.Status) end)
+                end
+            end)
+        end
+    end)
+end)() end
+
+-- ===== AUTO LEVELING (v2.9) =====
+-- Siklus: hop ke world acak (huruf A-Z, panjang MinLen..MaxLen, minimal 5) -> cek world bisa dipakai
+-- (ada block, tidak dikunci pemain lain) -> Auto Clear dengan batas gali (tidak sampai lapisan lava)
+-- -> bersih / waktu habis / keluar world -> hop lagi. Berhenti kalau level target tercapai.
+-- Menunggu kalau Penjaga / istirahat berkala / Auto Rejoin / Auto Join sedang mengurus.
+-- Saklar: Farm > Clear World > Auto Leveling.
+do (function()
+    local Lv = Clear.Lv
+    local rng = Random.new()
+    local LVKEY = { level = true, lvl = true, lv = true, playerlevel = true, plevel = true }
+
+    local function set(t) Lv.Status = t end
+
+    -- ---------- baca level ----------
+    local function okNum(v)
+        v = tonumber(v)
+        if v and v >= 1 and v <= 999 and v == math.floor(v) then return v end
+        return nil
+    end
+
+    -- "Lv 5", "Lv. 5", "LVL: 5", "Level 5" (teks pendek saja, supaya tidak salah tangkap)
+    local function parseLv(text)
+        if type(text) ~= "string" or text == "" or #text > 40 then return nil end
+        local t = text:gsub("<[^>]->", "")
+        if #t > 16 then return nil end
+        local n = t:match("^%s*[Ll][Vv][Ll]?%.?%s*:?%s*(%d+)%s*$")
+            or t:match("^%s*[Ll][Ee][Vv][Ee][Ll]%s*:?%s*(%d+)%s*$")
+        return okNum(n)
+    end
+
+    local function labelText(d)
+        local ok, txt = pcall(function()
+            local c = d.ContentText
+            if type(c) == "string" and c ~= "" then return c end
+            return d.Text
+        end)
+        return ok and txt or nil
+    end
+
+    -- Cari sumber angka level. Hasil: fungsi get, nama sumber (nil = tidak ketemu)
+    -- log(teks) diisi = mode diagnosa: semua kandidat (lv / level / xp / exp) dicatat
+    local function findSource(log)
+        local function cand(k)
+            local s = string.lower(tostring(k))
+            return s:find("lv") or s:find("level") or s:find("xp") or s:find("exp")
+        end
+        local get, src
+        -- 1) atribut pemain
+        local okA, attrs = pcall(function() return LocalPlayer:GetAttributes() end)
+        if okA and type(attrs) == "table" then
+            for k, v in pairs(attrs) do
+                if log and cand(k) then log(("atribut %s = %s"):format(tostring(k), tostring(v))) end
+                if not get and type(k) == "string" and LVKEY[string.lower(k)] and okNum(v) then
+                    local key = k
+                    get, src = function() return LocalPlayer:GetAttribute(key) end, "atribut " .. key
+                end
+            end
+        end
+        if get and not log then return get, src end
+        -- 2) leaderstats
+        local ls = LocalPlayer:FindFirstChild("leaderstats")
+        if ls then
+            for _, c in ipairs(ls:GetChildren()) do
+                if c:IsA("ValueBase") then
+                    local okV, v = pcall(function() return c.Value end)
+                    if log then log(("leaderstats %s = %s"):format(c.Name, tostring(okV and v))) end
+                    if not get and LVKEY[string.lower(c.Name)] and okV and okNum(v) then
+                        local inst = c
+                        get, src = function() return inst.Value end, "leaderstats " .. inst.Name
+                    end
+                end
+            end
+        end
+        if get and not log then return get, src end
+        -- 3) tabel game yang sudah ketemu (angka saja, tidak memanggil fungsi game)
+        for _, e in ipairs({ { "HUD", Refs.Hud }, { "Gems", Refs.Gems }, { "Menu", Refs.Menu } }) do
+            local t = e[2]
+            if type(t) == "table" then
+                local n = 0
+                for k, v in next, t do
+                    n += 1
+                    if n > 400 then break end
+                    if type(k) == "string" then
+                        if log and cand(k) then log(("%s.%s = %s"):format(e[1], k, tostring(v))) end
+                        if not get and LVKEY[string.lower(k)] and okNum(v) then
+                            local tbl, key = t, k
+                            get, src = function() return rawget(tbl, key) end, e[1] .. "." .. key
+                        end
+                    end
+                end
+            end
+        end
+        local s = playerState()
+        if type(s) == "table" then
+            for k, v in next, s do
+                if type(k) == "string" then
+                    if log and cand(k) then log(("state.%s = %s"):format(k, tostring(v))) end
+                    if not get and LVKEY[string.lower(k)] and okNum(v) then
+                        local key = k
+                        get, src = function()
+                            local st = playerState()
+                            return st and st[key]
+                        end, "state." .. key
+                    end
+                end
+            end
+        end
+        if get and not log then return get, src end
+        -- 4) teks HUD game (UI SkyP ada di gethui/CoreGui, jadi tidak ikut terbaca di sini)
+        local okD, ds = pcall(function() return PlayerGui:GetDescendants() end)
+        if okD and type(ds) == "table" then
+            local shown = 0
+            for _, d in ipairs(ds) do
+                if d:IsA("TextLabel") or d:IsA("TextButton") then
+                    local txt = labelText(d)
+                    if log and type(txt) == "string" and #txt <= 40 and cand(txt) and shown < 15 then
+                        shown += 1
+                        log(("HUD %s: %q"):format(d:GetFullName(), txt))
+                    end
+                    if not get and parseLv(txt) then
+                        local inst = d
+                        get, src = function()
+                            if not inst.Parent then return nil end
+                            return parseLv(labelText(inst))
+                        end, "HUD " .. d.Name
+                    end
+                end
+            end
+        end
+        return get, src
+    end
+
+    -- Level sekarang (nil = belum terbaca). Sumber diingat; dicari ulang paling cepat tiap 10 dtk.
+    function Lv.read()
+        if Lv.Get then
+            local ok, v = pcall(Lv.Get)
+            v = ok and okNum(v) or nil
+            if v then
+                Lv.Level = v
+                return v
+            end
+            Lv.Get, Lv.Src = nil, nil
+        end
+        if os.clock() - (Lv.ScanAt or -99) < 10 then return nil end
+        Lv.ScanAt = os.clock()
+        local okF, get, src = pcall(findSource)
+        if okF and get then
+            local ok, v = pcall(get)
+            v = ok and okNum(v) or nil
+            if v then
+                Lv.Get, Lv.Src, Lv.Level = get, src, v
+                return v
+            end
+        end
+        return nil
+    end
+
+    -- Tombol "Cek level": cetak semua kandidat ke console (F9) + hasil
+    function Lv.diagnose()
+        local lines = {}
+        local okF, get, src = pcall(findSource, function(t) lines[#lines + 1] = t end)
+        warn("[SkyP] ===== Cek level: " .. #lines .. " kandidat =====")
+        for _, l in ipairs(lines) do warn("[SkyP]   " .. l) end
+        if okF and get then
+            local ok, v = pcall(get)
+            v = ok and okNum(v) or nil
+            if v then
+                Lv.Get, Lv.Src, Lv.Level = get, src, v
+                warn(("[SkyP] Level terbaca: %d (dari %s)"):format(v, src))
+                return v, src, lines
+            end
+        end
+        warn("[SkyP] Level tidak terbaca")
+        return nil, nil, lines
+    end
+
+    -- ---------- world acak ----------
+    local function randName()
+        local a = math.max(5, math.floor(tonumber(Lv.MinLen) or 5))
+        local b = math.max(a, math.floor(tonumber(Lv.MaxLen) or a))
+        local n = rng:NextInteger(a, math.min(b, 24))
+        local t = table.create(n)
+        for i = 1, n do t[i] = string.char(rng:NextInteger(65, 90)) end -- A-Z
+        return table.concat(t)
+    end
+
+    -- Ada yang sedang mengurus masuk world / jeda? (Auto Leveling menunggu)
+    local function waitReason()
+        if Guard.Mode ~= "idle" then return "Penjaga sedang jalan" end
+        if Guard.RestSaved then return "istirahat berkala" end
+        if Rejoin.Busy then return "Auto Rejoin sedang masuk world" end
+        if Rejoin.AJ and Rejoin.AJ.Busy then return "Auto Join sedang masuk world" end
+        return nil
+    end
+
+    local function upper(s) return string.upper(tostring(s or "")) end
+
+    -- Pindah ke world acak. Hasil: true, nama | false
+    local function hop()
+        local tries = 0
+        while Lv.On and alive() and tries < 8 do
+            local why = waitReason()
+            if why then
+                set("Menunggu: " .. why)
+                task.wait(2)
+                continue
+            end
+            tries += 1
+            local name = randName()
+            set(("Pindah ke %s (percobaan %d/8)..."):format(name, tries))
+            Pabrik.Traveling = true -- Auto Join / Auto Rejoin menunggu selama pindah
+            Pabrik.TravelAt = os.clock()
+            local okC, ok, err = pcall(goWorld, name, nil)
+            Pabrik.Traveling = false
+            if not Lv.On then return false end
+            if okC and ok then
+                local t0 = os.clock()
+                while Lv.On and alive() and os.clock() - t0 < 12 do
+                    if playerState() and Refs.World and upper(Guard.worldName()) == name then break end
+                    task.wait(0.3)
+                end
+                if playerState() then
+                    Lv.Worlds += 1
+                    Lv.World = name
+                    return true, name
+                end
+                err = "karakter tidak muncul"
+            end
+            set(("Gagal masuk %s: %s"):format(name, tostring(okC and err or ok)))
+            task.wait(3)
+        end
+        return false
+    end
+
+    -- World ini layak di-clear? (ada block di atas batas gali & tidak dikunci pemain lain)
+    local function worldUsable()
+        local w = Refs.World
+        if not w or type(w.fg) ~= "table" or type(w.w) ~= "number" then return false, "data world belum ada" end
+        local mr = Clear.calcMaxRow(Clear.LimitPct)
+        if mr < 0 then return false, "world kosong" end
+        local old = Clear.MaxRow
+        Clear.MaxRow = mr
+        local total, allowed = 0, 0
+        local ok = pcall(function()
+            for y = 0, mr do
+                for x = 0, w.w - 1 do
+                    if clearLayerAt(x, y) then
+                        total += 1
+                        if canWorkAt(x, y) then allowed += 1 end
+                    end
+                end
+            end
+        end)
+        Clear.MaxRow = old
+        if not ok then return false, "gagal membaca world" end
+        if total == 0 then return false, "tidak ada yang bisa dipecah" end
+        if allowed < total * 0.5 then return false, "world dikunci pemain lain" end
+        return true, ("%d tile, s/d baris %d"):format(allowed, mr)
+    end
+
+    local function stopLv(reason)
+        if not Lv.On then return end
+        Lv.On = false
+        if Clear.Running then stopClear("Dihentikan: Auto Leveling dimatikan") end
+        Clear.MaxRow = -1
+        set(reason or "Mati")
+        if UI.LvToggle then pcall(function() UI.LvToggle:Set(false) end) end
+        if reason then
+            notify("Auto Leveling", reason, 6)
+            Hook.send("stop", "Auto Leveling berhenti: " .. reason)
+        end
+    end
+    Lv.stop = stopLv
+
+    local function loop()
+        local phase = Lv.ClearHere and "check" or "hop"
+        local clearAt, lastLvAt, pausedAt, outAt = 0, -99, nil, nil
+        while Lv.On and alive() do
+            task.wait(0.5)
+            -- level target
+            if os.clock() - lastLvAt > 3 then
+                lastLvAt = os.clock()
+                local lv = Lv.read()
+                if lv and not Lv.Level0 then Lv.Level0 = lv end
+                if lv and lv >= (tonumber(Lv.Target) or 10) then
+                    stopLv(("Level %d tercapai (target %d)"):format(lv, Lv.Target))
+                    break
+                end
+            end
+            if Guard.MaxHitAt and os.clock() - Guard.MaxHitAt < 15 then
+                stopLv("Batas waktu jalan (Keamanan) tercapai")
+                break
+            end
+            if (tonumber(Lv.MaxWorlds) or 0) > 0 and Lv.Cleared >= Lv.MaxWorlds and phase ~= "clear" then
+                stopLv(("%d world selesai di-clear (batas world)"):format(Lv.Cleared))
+                break
+            end
+            local why = waitReason()
+            if why then
+                set("Menunggu: " .. why)
+                pausedAt, outAt = nil, nil
+                continue
+            end
+
+            if phase == "hop" then
+                local hw = tonumber(Lv.HopWait) or 0
+                if hw > 0 then
+                    set(("Pindah world dalam %d dtk..."):format(hw))
+                    task.wait(hw)
+                end
+                if not Lv.On or not alive() then break end
+                local ok = hop()
+                if not Lv.On or not alive() then break end
+                if ok then
+                    phase = "check"
+                else
+                    set("8x gagal masuk world acak, coba lagi dalam 30 dtk")
+                    task.wait(30)
+                end
+            elseif phase == "check" then
+                if not playerState() then
+                    phase = "hop" -- di layar pilih world
+                    continue
+                end
+                task.wait(1) -- data world selesai dimuat
+                local ok, info = worldUsable()
+                if not ok then
+                    set(("Lewati %s: %s"):format(upper(Guard.worldName()), info))
+                    phase = "hop"
+                    continue
+                end
+                Lv.World = upper(Guard.worldName())
+                Auto.startClear()
+                if not Clear.Running then
+                    set("Auto Clear gagal mulai (" .. tostring(Clear.Status) .. "), pindah world")
+                    phase = "hop"
+                    continue
+                end
+                clearAt, pausedAt, outAt = os.clock(), nil, nil
+                phase = "clear"
+                set(("Clear %s (%s)"):format(Lv.World, info))
+            elseif phase == "clear" then
+                if Clear.Running then
+                    pausedAt = nil
+                    local inside = Guard.inWorld() and playerState() ~= nil
+                    if inside then outAt = nil else outAt = outAt or os.clock() end
+                    if outAt and os.clock() - outAt > 15 then
+                        stopClear("Keluar dari world")
+                        phase = "hop"
+                    elseif os.clock() - clearAt > (tonumber(Lv.MaxMin) or 10) * 60 then
+                        stopClear("Waktu di world habis")
+                        phase = "hop"
+                    else
+                        set(("Clear %s | sisa %s | %d dtk"):format(Lv.World,
+                            Clear.Remaining >= 0 and tostring(Clear.Remaining) or "-", math.floor(os.clock() - clearAt)))
+                    end
+                else
+                    local st = tostring(Clear.Status or "")
+                    if st == "Dijeda Penjaga" then
+                        -- Penjaga / istirahat melanjutkan sendiri; tidak dilanjutkan dalam 10 dtk = mulai lagi sendiri
+                        pausedAt = pausedAt or os.clock()
+                        set("Dijeda Penjaga / istirahat")
+                        if os.clock() - pausedAt > 10 then phase = "check" end
+                    elseif string.find(st, "^Dihentikan") then
+                        stopLv(st) -- dihentikan manual / fitur lain dimulai
+                        break
+                    else
+                        -- bersih / selesai (sisa tak terjangkau) / error / waktu habis
+                        if string.find(st, "bersih") or string.find(st, "^Selesai") then Lv.Cleared += 1 end
+                        phase = "hop"
+                    end
+                end
+            end
+        end
+    end
+
+    function Lv.start()
+        if Lv.On then return end
+        local err = checkAutoStart()
+        if err and err ~= "Kamu belum masuk world" then
+            notify("Auto Leveling", err, 5)
+            if UI.LvToggle then pcall(function() UI.LvToggle:Set(false) end) end
+            return
+        end
+        Lv.ScanAt = -99
+        local lv = Lv.read()
+        if lv and lv >= (tonumber(Lv.Target) or 10) then
+            notify("Auto Leveling", ("Level kamu sudah %d (target %d)"):format(lv, Lv.Target), 5)
+            if UI.LvToggle then pcall(function() UI.LvToggle:Set(false) end) end
+            return
+        end
+        if Pabrik.Running and Pabrik.stop then Pabrik.stop("Dihentikan karena Auto Leveling dimulai") end
+        if State.Running then stopFarm("Dihentikan karena Auto Leveling dimulai") end
+        if Farmer.Running then stopFarmer("Dihentikan karena Auto Leveling dimulai") end
+        if Splice.Running and Splice.stop then Splice.stop("Dihentikan karena Auto Leveling dimulai") end
+        if Vend.Running and Vend.stop then Vend.stop("Dihentikan karena Auto Leveling dimulai") end
+        if Clear.Running then
+            Lv.On = true -- supaya stopClear di bawah tidak dianggap "dihentikan manual"
+            stopClear(nil)
+        end
+        Lv.On = true
+        Lv.Worlds, Lv.Cleared = 0, 0
+        Lv.Level0 = lv
+        Lv.World = ""
+        set(lv and ("Mulai (level " .. lv .. ")") or "Mulai (level belum terbaca)")
+        if not lv then
+            notify("Auto Leveling", "Level belum terbaca: jalan terus sampai dimatikan / batas world. Tekan 'Cek level'", 6)
+        end
+        task.spawn(function()
+            local ok, e = pcall(loop)
+            Pabrik.Traveling = false
+            if not ok then
+                warn("[SkyP] Auto Leveling error: " .. tostring(e))
+                stopLv("Error: " .. tostring(e))
+            end
+        end)
+    end
+
+    -- status di tab Clear World
+    task.spawn(function()
+        local shown
+        while alive() do
+            task.wait(1)
+            if UI.LvStatus then
+                local lvTxt = Lv.Level and tostring(Lv.Level) or "belum terbaca"
+                local txt = "Status : " .. (Lv.On and "JALAN" or "MATI")
+                    .. "\nLevel  : " .. lvTxt .. "  (awal " .. tostring(Lv.Level0 or "-") .. ", target " .. tostring(Lv.Target) .. ")"
+                    .. (Lv.Src and ("\nSumber : " .. Lv.Src) or "")
+                    .. "\nWorld  : " .. (Lv.World ~= "" and Lv.World or "-")
+                    .. "  | dimasuki " .. Lv.Worlds .. " | selesai " .. Lv.Cleared
+                    .. "\nAksi   : " .. tostring(Lv.Status)
+                if txt ~= shown then
+                    shown = txt
+                    pcall(function() UI.LvStatus:SetDesc(txt) end)
+                end
+            end
+        end
+    end)
+end)() end
+
 -- ===== TAB: AUTO REJOIN (v2.1: tab sendiri di menu Keamanan) =====
 do (function()
     local RTab = makeTab("Auto Rejoin", "refresh-cw", "aman")
@@ -17617,6 +18634,30 @@ do (function()
             Callback = function() Rejoin.now() end,
         })
     end)
+
+    -- Auto Join (v2.4): layar pilih world terbuka -> masuk lagi ke world terakhir tiap beberapa detik
+    local jBox = box(RTab, "Auto Join", true)
+    safe(function()
+        UI.AJStatus = jBox:Paragraph({ Title = "Status Auto Join", Desc = Rejoin.AJ.Status })
+    end)
+    safe(function()
+        jBox:Toggle({
+            Title = "Auto Join",
+            Desc = "Terlempar ke layar pilih world: masuk lagi ke world terakhir tiap beberapa detik sampai berhasil. Bisa dipakai tanpa Auto Rejoin",
+            Value = Rejoin.AJ.On,
+            Callback = function(on)
+                Rejoin.AJ.On = on
+                Rejoin.AJ.Fails, Rejoin.AJ.LastTry = 0, 0
+                Rejoin.AJ.Status = on and "Menyala" or "Mati"
+            end,
+        })
+    end)
+    addNumber(jBox, {
+        Title = "Jeda tiap percobaan (detik)",
+        Desc = "Setelah 6x gagal berturut-turut otomatis melambat jadi 30 detik",
+        Min = 5, Max = 60, Step = 1, Default = Rejoin.AJ.Every,
+        Callback = function(v) Rejoin.AJ.Every = math.floor(v) end,
+    })
 
     -- 2) kapan rejoin
     local tBox = box(RTab, "Kapan rejoin", false)
@@ -17755,6 +18796,210 @@ do (function()
     end)
 end)() end
 
+-- ===== WEBHOOK LIVE (v2.9) =====
+-- 1 pesan embed di Discord yang di-edit tiap X detik (PATCH /messages/<id>), bukan pesan baru tiap update.
+-- Id pesan disimpan di config: execute ulang tetap mengedit pesan yang sama. Pesan dihapus = dibuat baru.
+-- Script ditutup = pesan ditandai OFFLINE. Nama & world ikut aturan privasi (Hook.HideName / HideWorld).
+do (function()
+    local HttpService = game:GetService("HttpService")
+    Hook.LiveStatus = "Mati"
+
+    -- world dari pengaturan (ikut disamarkan walau belum pernah dimasuki sesi ini)
+    function Hook.worldList()
+        local t = {}
+        local function add(v)
+            v = tostring(v or ""):match("^([^:|]*)") or ""
+            v = string.upper(v):gsub("[^A-Z0-9]", "")
+            if #v >= 3 then t[#t + 1] = v end
+        end
+        add(Rejoin.LastWorld)
+        add(Rejoin.Target)
+        for w in tostring(Rejoin.Backup or ""):gmatch("[^,]+") do add(w) end
+        add(Pabrik.Home)
+        add(Pabrik.DropWorld)
+        add(Vend.Point)
+        add(Clear.Lv.World)
+        if Rejoin.AJ then add(Rejoin.AJ.World) end
+        for k in pairs(Pabrik.Breaks or {}) do add(k) end
+        for k in pairs(Pabrik.Picks or {}) do add(k) end
+        return t
+    end
+
+    local function requester()
+        return (syn and syn.request) or (http and http.request) or http_request or request
+            or (fluxus and fluxus.request)
+    end
+
+    local function liveUrl()
+        local u = tostring(Hook.LiveUrl or "")
+        if u == "" then u = tostring(Hook.Url or "") end
+        return Hook.valid(u) and u or nil
+    end
+
+    -- "https://.../webhooks/ID/TOKEN?thread_id=1" -> base, query
+    local function split(u)
+        local base, q = string.match(u, "^([^?]+)%?(.*)$")
+        if not base then return u, nil end
+        return base, (q ~= "" and q or nil)
+    end
+
+    local function send(method, url, body)
+        local req = requester()
+        if not req then return nil, "executor tidak punya fungsi request" end
+        local ok, res = pcall(req, {
+            Url = url, Method = method,
+            Headers = { ["Content-Type"] = "application/json" }, Body = body,
+        })
+        if not ok or type(res) ~= "table" then return nil, tostring(res) end
+        return tonumber(res.StatusCode or res.Status), tostring(res.Body or "")
+    end
+
+    local function activities()
+        local t = {}
+        if Clear.Lv.On then t[#t + 1] = "Auto Leveling" end
+        if State.Running then t[#t + 1] = "Auto Farm" end
+        if Clear.Running then t[#t + 1] = "Auto Clear" end
+        if Farmer.Running then t[#t + 1] = "Farmer" end
+        if Pabrik.Running then t[#t + 1] = "Pabrik" end
+        if Splice.Running then t[#t + 1] = "Splice" end
+        if Vend.Running then t[#t + 1] = "Vending" end
+        if Spam.On then t[#t + 1] = "Auto Chat" end
+        return t
+    end
+
+    local function action()
+        if Clear.Lv.On then return Clear.Lv.Status end
+        if Clear.Running then return Clear.Status end
+        if Pabrik.Running then return Pabrik.Status end
+        if Farmer.Running then return Farmer.Status end
+        if Vend.Running then return Vend.Status end
+        if Splice.Running then return Splice.Status end
+        return "-"
+    end
+
+    local function field(name, value, inline)
+        value = tostring(value or "-")
+        if value == "" then value = "-" end
+        if #value > 1000 then value = string.sub(value, 1, 1000) .. "..." end
+        return { name = name, value = value, inline = inline ~= false }
+    end
+
+    local function build(offline)
+        local acts = activities()
+        local inWorld = false
+        pcall(function() inWorld = Guard.inWorld() and true or false end)
+        local world = "-"
+        pcall(function()
+            local w = Guard.worldName()
+            if w ~= "" and inWorld then world = w end
+        end)
+        local color, state
+        if offline then
+            color, state = 0xE85468, "OFFLINE (script berhenti)"
+        elseif not inWorld then
+            color, state = 0xFFB020, "Di luar world"
+        elseif #acts > 0 then
+            color, state = 0x2FBF71, "Jalan"
+        else
+            color, state = 0x2F7DFF, "Diam"
+        end
+        local okS, stats = pcall(function() return Stats.text and Stats.text() or "" end)
+        local lv = Clear.Lv.Level
+        local ts = nil
+        pcall(function() ts = DateTime.now():ToIsoDate() end)
+        return {
+            username = "SkyP Live",
+            embeds = { {
+                title = "SkyP Live - " .. state,
+                color = color,
+                description = (okS and stats ~= "") and ("```\n" .. Hook.mask(stats) .. "\n```") or nil,
+                fields = {
+                    field("Akun", Hook.who()),
+                    field("World", Hook.maskWorld(world)),
+                    field("Level", lv and tostring(lv) or "-"),
+                    field("Aktivitas", #acts > 0 and table.concat(acts, ", ") or "-", false),
+                    field("Aksi", Hook.mask(action()), false),
+                    field("Penjaga", tostring(Guard.Mode or "-")),
+                    field("Rejoin", tostring(Rejoin.Count or 0)),
+                },
+                footer = { text = ("SkyP v%s | update tiap %d dtk"):format(tostring(Session.Lic.Ver), math.max(10, tonumber(Hook.LiveSec) or 30)) },
+                timestamp = ts,
+            } },
+        }
+    end
+
+    -- kirim / edit pesan live. Hasil: true kalau berhasil
+    local function push(u, payload)
+        local okJ, body = pcall(HttpService.JSONEncode, HttpService, payload)
+        if not okJ then
+            Hook.LiveStatus = "Gagal menyusun pesan"
+            return false
+        end
+        local base, q = split(u)
+        local id = tostring(Hook.LiveId or "")
+        if id ~= "" then
+            local code = send("PATCH", base .. "/messages/" .. id .. (q and ("?" .. q) or ""), body)
+            if code and code < 300 then
+                Hook.LiveStatus = "Diperbarui " .. os.date("%H:%M:%S")
+                return true
+            elseif code == 429 then
+                Hook.LiveStatus = "Kena batas Discord, dicoba lagi nanti"
+                return false
+            elseif code == 400 or code == 403 or code == 404 then
+                Hook.LiveId = "" -- pesan dihapus / URL webhook diganti: buat pesan baru
+            else
+                Hook.LiveStatus = "Gagal edit (" .. tostring(code or "tidak bisa konek") .. ")"
+                return false
+            end
+        end
+        local code, res = send("POST", base .. "?wait=true" .. (q and ("&" .. q) or ""), body)
+        if not code or code >= 300 then
+            Hook.LiveStatus = "Gagal kirim (" .. tostring(code or res) .. ")"
+            return false
+        end
+        local okD, d = pcall(HttpService.JSONDecode, HttpService, res or "")
+        if okD and type(d) == "table" and d.id then
+            Hook.LiveId = tostring(d.id)
+            Hook.LiveStatus = "Pesan live dibuat " .. os.date("%H:%M:%S")
+            return true
+        end
+        -- tanpa id pesan, tiap update jadi pesan baru (spam): live dimatikan
+        Hook.LiveOn = false
+        if UI.LiveToggle then pcall(function() UI.LiveToggle:Set(false) end) end
+        Hook.LiveStatus = "Executor tidak mengembalikan id pesan: webhook live dimatikan"
+        notify("Discord", Hook.LiveStatus, 6)
+        return false
+    end
+
+    function Hook.liveOffline()
+        local u = liveUrl()
+        if u and tostring(Hook.LiveId or "") ~= "" then pcall(push, u, build(true)) end
+    end
+
+    task.spawn(function()
+        local last = -999
+        while alive() do
+            task.wait(1)
+            if Hook.LiveOn then
+                local u = liveUrl()
+                if not u then
+                    Hook.LiveStatus = "Isi URL webhook dulu (live / utama)"
+                elseif Hook.LiveNow or os.clock() - last >= math.max(10, tonumber(Hook.LiveSec) or 30) then
+                    Hook.LiveNow = false
+                    last = os.clock()
+                    pcall(push, u, build(false))
+                end
+            end
+            if UI.LiveStatus and UI.LiveShown ~= Hook.LiveStatus then
+                UI.LiveShown = Hook.LiveStatus
+                pcall(function() UI.LiveStatus:SetDesc(Hook.LiveStatus) end)
+            end
+        end
+        -- script ditutup / execute ulang: tandai OFFLINE
+        if Hook.LiveOn then Hook.liveOffline() end
+    end)
+end)() end
+
 -- ===== TAB: DISCORD =====
 do (function()
     local DcTab = makeTab("Discord", "bell", "setel")
@@ -17831,6 +19076,81 @@ do (function()
             })
         end)
     end
+
+    -- v2.9: privasi
+    local dPriv = box(DcTab, "Privasi", true)
+    safe(function()
+        dPriv:Toggle({
+            Title = "Sembunyikan nama akun",
+            Desc = "Nama akun di semua webhook disamarkan, contoh: Ra******",
+            Value = Hook.HideName,
+            Callback = function(on) Hook.HideName = on end,
+        })
+    end)
+    safe(function()
+        dPriv:Toggle({
+            Title = "Sembunyikan nama world",
+            Desc = "Nama world di semua webhook (notifikasi, rejoin, live) diganti [world]",
+            Value = Hook.HideWorld,
+            Callback = function(on) Hook.HideWorld = on end,
+        })
+    end)
+
+    -- v2.9: webhook live
+    local dLive = box(DcTab, "Webhook Live", true)
+    safe(function()
+        UI.LiveStatus = dLive:Paragraph({ Title = "Status Live", Desc = Hook.LiveStatus or "Mati" })
+    end)
+    safe(function()
+        UI.LiveToggle = dLive:Toggle({
+            Title = "Webhook Live",
+            Desc = "1 pesan di Discord yang terus di-update: aktivitas, level, statistik, status. Script ditutup = OFFLINE",
+            Value = Hook.LiveOn,
+            Callback = function(on)
+                local was = Hook.LiveOn
+                Hook.LiveOn = on
+                if on then
+                    Hook.LiveNow = true
+                elseif was and Hook.liveOffline then
+                    task.spawn(Hook.liveOffline)
+                    Hook.LiveStatus = "Mati"
+                end
+            end,
+        })
+    end)
+    safe(function()
+        dLive:Input({
+            Title = "URL Webhook Live (opsional)",
+            Desc = "Kosong = pakai URL webhook utama. Bisa channel lain khusus live",
+            Value = Hook.LiveUrl,
+            Placeholder = "https://discord.com/api/webhooks/...",
+            Callback = function(text)
+                text = tostring(text or ""):gsub("^%s+", ""):gsub("%s+$", "")
+                if text ~= Hook.LiveUrl then Hook.LiveId = "" end -- URL baru: buat pesan baru
+                Hook.LiveUrl = text
+                if text ~= "" and not Hook.valid(text) then
+                    notify("Discord", "URL webhook live tidak valid", 4)
+                end
+            end,
+        })
+    end)
+    addNumber(dLive, {
+        Title = "Update tiap (detik)",
+        Desc = "Minimal 10 detik (batas Discord)",
+        Min = 10, Max = 300, Step = 5, Default = Hook.LiveSec,
+        Callback = function(v) Hook.LiveSec = math.floor(v) end,
+    })
+    safe(function()
+        dLive:Button({
+            Title = "Buat pesan live baru",
+            Desc = "Pesan lama dibiarkan, update berikutnya ke pesan baru",
+            Callback = function()
+                Hook.LiveId = ""
+                Hook.LiveNow = true
+                notify("Discord", Hook.LiveOn and "Pesan live baru dibuat di update berikutnya" or "Nyalakan Webhook Live dulu", 4)
+            end,
+        })
+    end)
 end)() end
 
 
@@ -18525,3 +19845,11 @@ Session.Cleanup = function()
     pcall(function() FlyPad:Destroy() end)
     pcall(function() Window:Destroy() end)
 end
+
+-- [skyp-guard] kalau key dicabut/expired/dipakai di tempat lain, loader memanggil ini
+table.insert(SKYP.onStop, function()
+    if G.__Alfian == Session then
+        pcall(Session.Cleanup)
+        G.__Alfian = nil
+    end
+end)
