@@ -10516,17 +10516,24 @@ end)
 safe(function()
     Box.ClearLv:Button({
         Title = "Cek level",
-        Desc = "Cari angka level di game. Detail kandidat dicetak di console (F9)",
+        Desc = "Cari angka level di game. Hasil tampil di bawah & disalin ke clipboard (tempel ke developer)",
         Callback = function()
             if not Clear.Lv.diagnose then return end
-            local v, src, lines = Clear.Lv.diagnose()
-            if v then
-                notify("Auto Leveling", ("Level %d (dari %s)"):format(v, src), 6)
-            else
-                notify("Auto Leveling", ("Level tidak terbaca (%d kandidat di console F9)"):format(#lines), 6)
-            end
+            notify("Auto Leveling", "Mencari level... (bisa lag sebentar)", 3)
+            task.spawn(function()
+                local v, src, lines = Clear.Lv.diagnose()
+                local copied = Clear.Lv.Copied and " | hasil disalin ke clipboard" or ""
+                if v then
+                    notify("Auto Leveling", ("Level %d (dari %s)%s"):format(v, src, copied), 6)
+                else
+                    notify("Auto Leveling", ("Level tidak terbaca, %d kandidat%s"):format(#lines, copied), 6)
+                end
+            end)
         end,
     })
+end)
+safe(function()
+    UI.LvDiag = Box.ClearLv:Paragraph({ Title = "Hasil Cek level", Desc = "Tekan 'Cek level'" })
 end)
 
 -- ===== TAB: FARMER =====
@@ -18164,19 +18171,36 @@ do (function()
     local function set(t) Lv.Status = t end
 
     -- ---------- baca level ----------
+    -- Sumber dicoba berurutan; yang pertama ketemu dipakai lalu diingat:
+    --   1) atribut pemain            2) leaderstats / nilai Level di folder pemain
+    --   3) angka "level" di tabel game (HUD / Gems / Menu)
+    --   4) angka di dalam fungsi game bernama level (cara sama seperti baca gems)
+    --   5) tabel data pemain di memori (getgc: punya level + xp)
+    --   6) teks HUD ("Lv 5", "Lv.5", "Level 5", "LVL 5 (120/300)")
     local function okNum(v)
         v = tonumber(v)
         if v and v >= 1 and v <= 999 and v == math.floor(v) then return v end
         return nil
     end
 
-    -- "Lv 5", "Lv. 5", "LVL: 5", "Level 5" (teks pendek saja, supaya tidak salah tangkap)
+    local LVNAMES = { "level", "Level", "LEVEL", "lvl", "Lvl", "LVL", "lv", "Lv", "LV", "playerLevel", "PlayerLevel" }
+    local XPNAMES = { "xp", "XP", "Xp", "exp", "Exp", "EXP", "experience", "Experience", "nextXp", "maxXp", "xpMax",
+        "needXp", "xpNeed", "totalXp", "nextXP", "maxXP" }
+    local LVFN = { "setLevel", "updateLevel", "levelUp", "onLevel", "onLevelUp", "setLvl", "setLv", "getLevel",
+        "level", "showLevel", "renderLevel", "refreshLevel" }
+
+    local function cand(k)
+        local s = string.lower(tostring(k))
+        return s:find("lv") or s:find("level") or s:find("xp") or s:find("exp")
+    end
+
     local function parseLv(text)
-        if type(text) ~= "string" or text == "" or #text > 40 then return nil end
+        if type(text) ~= "string" or text == "" or #text > 60 then return nil end
         local t = text:gsub("<[^>]->", "")
-        if #t > 16 then return nil end
-        local n = t:match("^%s*[Ll][Vv][Ll]?%.?%s*:?%s*(%d+)%s*$")
-            or t:match("^%s*[Ll][Ee][Vv][Ee][Ll]%s*:?%s*(%d+)%s*$")
+        if #t > 30 then return nil end
+        local n = t:match("^%s*[Ll][Vv][Ll]?%.?%s*:?%s*(%d+)")
+            or t:match("[Ll][Ee][Vv][Ee][Ll]%s*:?%s*(%d+)")
+            or t:match("%f[%a][Ll][Vv][Ll]?%.?%s*:?%s*(%d+)")
         return okNum(n)
     end
 
@@ -18189,54 +18213,145 @@ do (function()
         return ok and txt or nil
     end
 
-    -- Cari sumber angka level. Hasil: fungsi get, nama sumber (nil = tidak ketemu)
-    -- log(teks) diisi = mode diagnosa: semua kandidat (lv / level / xp / exp) dicatat
-    local function findSource(log)
-        local function cand(k)
-            local s = string.lower(tostring(k))
-            return s:find("lv") or s:find("level") or s:find("xp") or s:find("exp")
+    -- angka bulat 1..999 di upvalue fungsi; lebih dari 1 angka berbeda = ragu (nil)
+    local function fnLevel(f)
+        if type(f) ~= "function" then return nil end
+        local okU, ups = pcall(getUpvalues, f)
+        if not okU or type(ups) ~= "table" then return nil end
+        local found
+        for _, v in pairs(ups) do
+            local n = okNum(v)
+            if n then
+                if found and found ~= n then return nil end
+                found = n
+            end
         end
+        return found
+    end
+
+    local function upvalText(f)
+        local okU, ups = pcall(getUpvalues, f)
+        if not okU or type(ups) ~= "table" then return "?" end
+        local t = {}
+        for _, v in pairs(ups) do
+            if type(v) == "number" then t[#t + 1] = tostring(v) end
+            if #t >= 8 then break end
+        end
+        return "[" .. table.concat(t, ",") .. "]"
+    end
+
+    -- tabel data pemain di memori: punya level, dan xp / id / nama pemain. Hasil: tabel, key, skor
+    local function gcLevelTable(log)
+        if type(getgc) ~= "function" then return nil end
+        local okG, list = pcall(getgc, true)
+        if not okG or type(list) ~= "table" then return nil end
+        local uid, uname = LocalPlayer.UserId, LocalPlayer.Name
+        local best, bestKey, bestScore, logged = nil, nil, 0, 0
+        for _, t in ipairs(list) do
+            if type(t) == "table" then
+                pcall(function()
+                    for _, k in ipairs(LVNAMES) do
+                        local v = rawget(t, k)
+                        if okNum(v) then
+                            local score, xpk = 1, nil
+                            for _, x in ipairs(XPNAMES) do
+                                if type(rawget(t, x)) == "number" then
+                                    score += 2
+                                    xpk = x
+                                    break
+                                end
+                            end
+                            if rawget(t, "userId") == uid or rawget(t, "UserId") == uid or rawget(t, "uid") == uid
+                                or rawget(t, "name") == uname or rawget(t, "Name") == uname then
+                                score += 3
+                            end
+                            if type(rawget(t, "gems")) == "number" or type(rawget(t, "Gems")) == "number" then score += 1 end
+                            if log and score >= 2 and logged < 12 then
+                                logged += 1
+                                log(("memori: %s=%s%s (skor %d)"):format(k, tostring(v),
+                                    xpk and (", " .. xpk .. "=" .. tostring(rawget(t, xpk))) or "", score))
+                            end
+                            if score > bestScore then best, bestKey, bestScore = t, k, score end
+                            return
+                        end
+                    end
+                    -- fungsi bernama level di dalam tabel ini
+                    for _, fk in ipairs(LVFN) do
+                        local f = rawget(t, fk)
+                        if type(f) == "function" then
+                            local n = fnLevel(f)
+                            if log and logged < 12 then
+                                logged += 1
+                                log(("memori fungsi %s: upvalue %s"):format(fk, upvalText(f)))
+                            end
+                            if n and bestScore < 2 then best, bestKey, bestScore = f, fk, 2 end
+                        end
+                    end
+                end)
+            end
+        end
+        if best and bestScore >= 2 then return best, bestKey, bestScore end
+        return nil
+    end
+
+    -- Cari sumber angka level. Hasil: fungsi get, nama sumber (nil = tidak ketemu)
+    -- deep = ikut cari di memori (getgc, berat). log(teks) = mode diagnosa: semua kandidat dicatat.
+    local function findSource(deep, log)
         local get, src
+        local function take(g, s)
+            if not get then get, src = g, s end
+        end
         -- 1) atribut pemain
         local okA, attrs = pcall(function() return LocalPlayer:GetAttributes() end)
         if okA and type(attrs) == "table" then
             for k, v in pairs(attrs) do
                 if log and cand(k) then log(("atribut %s = %s"):format(tostring(k), tostring(v))) end
-                if not get and type(k) == "string" and LVKEY[string.lower(k)] and okNum(v) then
+                if type(k) == "string" and LVKEY[string.lower(k)] and okNum(v) then
                     local key = k
-                    get, src = function() return LocalPlayer:GetAttribute(key) end, "atribut " .. key
+                    take(function() return LocalPlayer:GetAttribute(key) end, "atribut " .. key)
                 end
             end
         end
         if get and not log then return get, src end
-        -- 2) leaderstats
-        local ls = LocalPlayer:FindFirstChild("leaderstats")
-        if ls then
-            for _, c in ipairs(ls:GetChildren()) do
+        -- 2) leaderstats + nilai Level di folder pemain (Data / Stats / dll)
+        local okD, desc = pcall(function() return LocalPlayer:GetDescendants() end)
+        if okD and type(desc) == "table" then
+            for _, c in ipairs(desc) do
                 if c:IsA("ValueBase") then
                     local okV, v = pcall(function() return c.Value end)
-                    if log then log(("leaderstats %s = %s"):format(c.Name, tostring(okV and v))) end
-                    if not get and LVKEY[string.lower(c.Name)] and okV and okNum(v) then
+                    if log and (cand(c.Name) or (c.Parent and c.Parent.Name == "leaderstats")) then
+                        log(("nilai %s = %s"):format(c:GetFullName(), tostring(okV and v)))
+                    end
+                    if LVKEY[string.lower(c.Name)] and okV and okNum(v) then
                         local inst = c
-                        get, src = function() return inst.Value end, "leaderstats " .. inst.Name
+                        take(function() return inst.Parent and inst.Value end, "nilai " .. c.Name)
                     end
                 end
             end
         end
         if get and not log then return get, src end
-        -- 3) tabel game yang sudah ketemu (angka saja, tidak memanggil fungsi game)
-        for _, e in ipairs({ { "HUD", Refs.Hud }, { "Gems", Refs.Gems }, { "Menu", Refs.Menu } }) do
+        -- 3) + 4) tabel game yang sudah ketemu (angka, atau angka di dalam fungsi bernama level)
+        for _, e in ipairs({ { "HUD", Refs.Hud }, { "Gems", Refs.Gems }, { "Menu", Refs.Menu }, { "Inv", Refs.Inv } }) do
             local t = e[2]
             if type(t) == "table" then
                 local n = 0
                 for k, v in next, t do
                     n += 1
                     if n > 400 then break end
-                    if type(k) == "string" then
-                        if log and cand(k) then log(("%s.%s = %s"):format(e[1], k, tostring(v))) end
-                        if not get and LVKEY[string.lower(k)] and okNum(v) then
-                            local tbl, key = t, k
-                            get, src = function() return rawget(tbl, key) end, e[1] .. "." .. key
+                    if type(k) == "string" and cand(k) then
+                        if type(v) == "function" then
+                            if log then log(("%s.%s() upvalue %s"):format(e[1], k, upvalText(v))) end
+                            local s = string.lower(k)
+                            if (s:find("level") or s == "lv" or s == "lvl") and fnLevel(v) then
+                                local f = v
+                                take(function() return fnLevel(f) end, e[1] .. "." .. k .. "()")
+                            end
+                        else
+                            if log then log(("%s.%s = %s"):format(e[1], k, tostring(v))) end
+                            if LVKEY[string.lower(k)] and okNum(v) then
+                                local tbl, key = t, k
+                                take(function() return rawget(tbl, key) end, e[1] .. "." .. key)
+                            end
                         end
                     end
                 end
@@ -18245,44 +18360,57 @@ do (function()
         local s = playerState()
         if type(s) == "table" then
             for k, v in next, s do
-                if type(k) == "string" then
-                    if log and cand(k) then log(("state.%s = %s"):format(k, tostring(v))) end
-                    if not get and LVKEY[string.lower(k)] and okNum(v) then
+                if type(k) == "string" and cand(k) then
+                    if log then log(("state.%s = %s"):format(k, tostring(v))) end
+                    if LVKEY[string.lower(k)] and okNum(v) then
                         local key = k
-                        get, src = function()
+                        take(function()
                             local st = playerState()
                             return st and st[key]
-                        end, "state." .. key
+                        end, "state." .. key)
                     end
                 end
             end
         end
         if get and not log then return get, src end
-        -- 4) teks HUD game (UI SkyP ada di gethui/CoreGui, jadi tidak ikut terbaca di sini)
-        local okD, ds = pcall(function() return PlayerGui:GetDescendants() end)
-        if okD and type(ds) == "table" then
+        -- 6) teks HUD game (UI SkyP ada di gethui/CoreGui, jadi tidak ikut terbaca di sini)
+        local okG, ds = pcall(function() return PlayerGui:GetDescendants() end)
+        if okG and type(ds) == "table" then
             local shown = 0
             for _, d in ipairs(ds) do
-                if d:IsA("TextLabel") or d:IsA("TextButton") then
+                if d:IsA("TextLabel") or d:IsA("TextButton") or d:IsA("TextBox") then
                     local txt = labelText(d)
                     if log and type(txt) == "string" and #txt <= 40 and cand(txt) and shown < 15 then
                         shown += 1
                         log(("HUD %s: %q"):format(d:GetFullName(), txt))
                     end
-                    if not get and parseLv(txt) then
+                    if parseLv(txt) then
                         local inst = d
-                        get, src = function()
+                        take(function()
                             if not inst.Parent then return nil end
                             return parseLv(labelText(inst))
-                        end, "HUD " .. d.Name
+                        end, "HUD " .. d.Name)
                     end
+                end
+            end
+        end
+        if get and not log then return get, src end
+        -- 5) memori (berat: hanya kalau deep)
+        if deep then
+            local obj, key = gcLevelTable(log)
+            if obj then
+                if type(obj) == "function" then
+                    take(function() return fnLevel(obj) end, "memori " .. key .. "()")
+                else
+                    take(function() return rawget(obj, key) end, "memori ." .. key)
                 end
             end
         end
         return get, src
     end
 
-    -- Level sekarang (nil = belum terbaca). Sumber diingat; dicari ulang paling cepat tiap 10 dtk.
+    -- Level sekarang (nil = belum terbaca). Sumber diingat; dicari ulang tiap 10 dtk
+    -- (memori/getgc paling cepat tiap 60 dtk karena berat).
     function Lv.read()
         if Lv.Get then
             local ok, v = pcall(Lv.Get)
@@ -18295,7 +18423,9 @@ do (function()
         end
         if os.clock() - (Lv.ScanAt or -99) < 10 then return nil end
         Lv.ScanAt = os.clock()
-        local okF, get, src = pcall(findSource)
+        local deep = os.clock() - (Lv.DeepAt or -999) >= 60
+        if deep then Lv.DeepAt = os.clock() end
+        local okF, get, src = pcall(findSource, deep, nil)
         if okF and get then
             local ok, v = pcall(get)
             v = ok and okNum(v) or nil
@@ -18307,23 +18437,32 @@ do (function()
         return nil
     end
 
-    -- Tombol "Cek level": cetak semua kandidat ke console (F9) + hasil
+    -- Tombol "Cek level": semua kandidat dicatat -> console (F9), ditampilkan di menu, dan disalin ke clipboard
     function Lv.diagnose()
         local lines = {}
-        local okF, get, src = pcall(findSource, function(t) lines[#lines + 1] = t end)
-        warn("[SkyP] ===== Cek level: " .. #lines .. " kandidat =====")
-        for _, l in ipairs(lines) do warn("[SkyP]   " .. l) end
+        local okF, get, src = pcall(findSource, true, function(t) lines[#lines + 1] = t end)
+        if not okF then lines[#lines + 1] = "error: " .. tostring(get) end
+        local v
         if okF and get then
-            local ok, v = pcall(get)
-            v = ok and okNum(v) or nil
-            if v then
-                Lv.Get, Lv.Src, Lv.Level = get, src, v
-                warn(("[SkyP] Level terbaca: %d (dari %s)"):format(v, src))
-                return v, src, lines
-            end
+            local ok, n = pcall(get)
+            v = ok and okNum(n) or nil
+            if v then Lv.Get, Lv.Src, Lv.Level = get, src, v end
         end
-        warn("[SkyP] Level tidak terbaca")
-        return nil, nil, lines
+        local head = v and ("Level terbaca: %d (dari %s)"):format(v, src) or "Level TIDAK terbaca"
+        local report = "SkyP Cek level v" .. tostring(Session.Lic.Ver) .. "\n" .. head .. "\n"
+            .. (#lines > 0 and table.concat(lines, "\n") or "(tidak ada kandidat lv / level / xp / exp)")
+        warn("[SkyP] ===== " .. head .. " | " .. #lines .. " kandidat =====")
+        for _, l in ipairs(lines) do warn("[SkyP]   " .. l) end
+        local clip = setclipboard or toclipboard
+        Lv.Copied = false
+        if type(clip) == "function" then Lv.Copied = pcall(clip, report) end
+        if UI.LvDiag then
+            local show = { head }
+            for i = 1, math.min(10, #lines) do show[#show + 1] = lines[i] end
+            if #lines > 10 then show[#show + 1] = ("... +%d lagi (lengkap di clipboard / F9)"):format(#lines - 10) end
+            pcall(function() UI.LvDiag:SetDesc(table.concat(show, "\n")) end)
+        end
+        return v, src, lines
     end
 
     -- ---------- world acak ----------
