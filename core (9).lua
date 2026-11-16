@@ -3,7 +3,7 @@ local SKYP = ...
 -- Dari loader skyp-guard: SKYP dikirim loader (versi, cek key, onStop) seperti biasa.
 if type(SKYP) ~= "table" then
     SKYP = {
-        version = "v2.9.1",
+        version = "v2.9.2",
         shared = {},                          -- SkyUI pakai versi yang ditanam di bawah
         onStop = {},
         isAlive = function() return true end, -- tanpa loader: tidak ada key yang bisa dicabut
@@ -64,7 +64,7 @@ end
 -- [skyp-guard] Lisensi sekarang dipegang loader (/auth + /hb). Pengecekan lama dimatikan (Off = true).
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
     Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.1" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.2" end
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -1897,6 +1897,19 @@ local Clear = {
         World = "",           -- world yang sedang di-clear
         Status = "Mati",
     },
+    -- v2.9.2: pengukur XP. Mencatat pukulan & block pecah per jenis block dan per level (dari event levelUp),
+    -- plus XP dari event XP game kalau ada. Dipakai untuk menentukan block / world yang paling cepat naik level.
+    -- Fungsinya diisi di blok "PENGUKUR XP" (sebelum Auto Leveling).
+    Meter = {
+        Hits = 0, Broke = 0, T0 = os.time(),
+        Items = {},           -- [id] = { b = pecah, h = pukul, xp = XP terhitung, xn = event XP terhitung }
+        Laps = {},            -- level yang sudah lewat lengkap (maks 20)
+        Times = {},           -- os.clock() tiap pecah, 60 dtk terakhir (laju pecah/menit)
+        Xp = 0, XpN = 0,      -- total XP dari event XP
+        XpEv = "-",           -- event XP yang terpasang
+        XpLog = {},           -- 8 event XP terakhir (mentah)
+        LastBreakId = nil, LastBreakAt = 0,
+    },
 }
 
 -- Auto Splice: tanam Seed A lalu splice Seed B
@@ -3049,7 +3062,10 @@ local function tryBreak(x, y, includeBg)
             return nil
         end
         if State.Visual then Anim.swing(x, y, "punch") end
-        if tileAt(layer, x, y) ~= id then
+        local broke = tileAt(layer, x, y) ~= id
+        local mp = Clear.Meter.onPunch -- v2.9.2: pengukur XP
+        if mp then pcall(mp, id, broke) end
+        if broke then
             Drops.brokeAt[key] = os.clock()
             State.Broken += 1
             State.LastAction = "Break " .. itemName(id) .. " (" .. x .. "," .. y .. ")"
@@ -3070,6 +3086,8 @@ local function tryBreak(x, y, includeBg)
     sendHitFx(x, y)
     if State.Visual then Anim.swing(x, y, "punch") end
     local need = hitsNeeded(id)
+    local mp = Clear.Meter.onPunch -- v2.9.2: pengukur XP
+    if mp then pcall(mp, id, hc.n >= need) end
     if hc.n >= need then
         sendSetTile(layer, x, y, 0)
         HitCount[key] = nil
@@ -10600,6 +10618,35 @@ safe(function()
 end)
 safe(function()
     UI.LvDiag = Box.ClearLv:Paragraph({ Title = "Hasil Cek level", Desc = "Tekan 'Cek level'" })
+end)
+-- v2.9.2: pengukur XP
+safe(function()
+    Box.ClearLv:Button({
+        Title = "Laporan XP",
+        Desc = "Pukulan & block pecah per jenis block dan per level. Tampil di bawah & disalin ke clipboard (tempel ke developer)",
+        Callback = function()
+            if not Clear.Meter.report then return end
+            local ok, txt, copied = pcall(Clear.Meter.report)
+            if ok then
+                notify("Pengukur XP", copied and "Laporan disalin ke clipboard" or "Laporan tampil di bawah (clipboard tidak ada)", 4)
+            else
+                notify("Pengukur XP", "Gagal: " .. tostring(txt), 5)
+            end
+        end,
+    })
+end)
+safe(function()
+    Box.ClearLv:Button({
+        Title = "Reset pengukur XP",
+        Desc = "Mulai hitung dari nol (level yang sedang berjalan tidak dihitung sampai naik level berikutnya)",
+        Callback = function()
+            if Clear.Meter.reset then Clear.Meter.reset() end
+            notify("Pengukur XP", "Direset", 3)
+        end,
+    })
+end)
+safe(function()
+    UI.LvMeter = Box.ClearLv:Paragraph({ Title = "Laporan XP", Desc = "Tekan 'Laporan XP'" })
 end)
 
 -- ===== TAB: FARMER =====
@@ -18248,6 +18295,329 @@ do (function()
     end)
 end)() end
 
+-- ===== PENGUKUR XP (v2.9.2) =====
+-- Hanya MENCATAT (tidak mengirim apa pun ke server):
+--   - tiap pukulan & block pecah dari tryBreak (semua mode: Clear, Auto Leveling, Farm, Pabrik)
+--   - tiap event levelUp = 1 putaran level selesai: berapa pukulan / pecah / detik untuk 1 level
+--   - event XP game (kalau ada, nama berisi "xp" / "exp"): XP dibagikan ke block yang terakhir pecah (<= 1.5 dtk)
+-- Putaran pertama setelah mulai/reset tidak lengkap (mulai di tengah level), jadi tidak dipakai.
+-- Data ikut dibawa saat Auto Leveling pindah world (export/import lewat catatan Auto Leveling).
+do (function()
+    local M = Clear.Meter
+    local MAXLAPS = 20
+
+    local function newSeg(partial)
+        M.SegHits, M.SegBroke, M.SegXp = 0, 0, 0
+        M.SegT0 = os.time()
+        M.SegPartial = partial
+        M.SegItems = {}
+    end
+    newSeg(true)
+
+    local function item(id)
+        local mi = M.Items[id]
+        if not mi then
+            mi = { b = 0, h = 0, xp = 0, xn = 0 }
+            M.Items[id] = mi
+        end
+        return mi
+    end
+
+    local function prune(now)
+        local t = M.Times
+        while t[1] and now - t[1] > 60 do table.remove(t, 1) end
+    end
+
+    function M.onPunch(id, broke)
+        if not id then return end
+        M.Hits += 1
+        M.SegHits += 1
+        local mi = item(id)
+        mi.h += 1
+        if broke then
+            local now = os.clock()
+            M.Broke += 1
+            M.SegBroke += 1
+            mi.b += 1
+            M.SegItems[id] = (M.SegItems[id] or 0) + 1
+            M.LastBreakId, M.LastBreakAt = id, now
+            M.Times[#M.Times + 1] = now
+            prune(now)
+        end
+    end
+
+    local function topItems(map, n)
+        local list = {}
+        for id, c in pairs(map) do list[#list + 1] = { id = id, n = c } end
+        table.sort(list, function(a, b) return a.n > b.n end)
+        local parts = {}
+        for i = 1, math.min(n, #list) do parts[i] = itemName(list[i].id) .. " " .. list[i].n end
+        return table.concat(parts, ", ")
+    end
+
+    -- event levelUp masuk: simpan putaran (kalau lengkap), mulai putaran baru
+    function M.lap(level)
+        if not M.SegPartial then
+            table.insert(M.Laps, {
+                lv = tonumber(level), hits = M.SegHits, broke = M.SegBroke,
+                sec = os.time() - (M.SegT0 or os.time()), xp = M.SegXp, top = topItems(M.SegItems, 3),
+            })
+            while #M.Laps > MAXLAPS do table.remove(M.Laps, 1) end
+        end
+        newSeg(false)
+    end
+
+    -- ---------- event XP (hanya mendengar) ----------
+    local function describe(v)
+        if type(v) == "table" then
+            local out, n = {}, 0
+            for k, x in next, v do
+                n += 1
+                if n > 8 then
+                    out[#out + 1] = "..."
+                    break
+                end
+                out[#out + 1] = tostring(k) .. "=" .. (type(x) == "table" and "{...}" or tostring(x))
+            end
+            return "{" .. table.concat(out, ", ") .. "}"
+        end
+        return tostring(v)
+    end
+
+    local XPKEYS = { "xp", "XP", "exp", "Exp", "amount", "gain", "value", "add" }
+    function M.onXp(name, ...)
+        local args = table.pack(...)
+        local parts, amount = {}, nil
+        for i = 1, args.n do
+            local v = args[i]
+            parts[#parts + 1] = describe(v)
+            if not amount then
+                if type(v) == "number" then
+                    amount = v
+                elseif type(v) == "table" then
+                    for _, k in ipairs(XPKEYS) do
+                        local n = tonumber(rawget(v, k))
+                        if n then
+                            amount = n
+                            break
+                        end
+                    end
+                end
+            end
+        end
+        local log = M.XpLog
+        log[#log + 1] = os.date("%H:%M:%S") .. " " .. name .. "(" .. table.concat(parts, ", ") .. ")"
+        while #log > 8 do table.remove(log, 1) end
+        if not amount or amount <= 0 or amount > 1e7 then return end
+        -- event mengirim TOTAL XP (angka terus naik) atau TAMBAHAN XP? 5x naik berturut-turut = total
+        local prev = M.XpRaw
+        M.XpRaw = amount
+        if prev and amount > prev then M.XpUp = (M.XpUp or 0) + 1 else M.XpUp = 0 end
+        if (M.XpUp or 0) >= 5 then M.XpMode = "total" end
+        local gain = amount
+        if M.XpMode == "total" then
+            if not prev or amount < prev then return end -- reset (naik level): tidak bisa dihitung
+            gain = amount - prev
+        end
+        if gain <= 0 then return end
+        M.Xp += gain
+        M.XpN += 1
+        M.SegXp += gain
+        if M.LastBreakId and os.clock() - M.LastBreakAt <= 1.5 then
+            local mi = item(M.LastBreakId)
+            mi.xp += gain
+            mi.xn += 1
+        end
+    end
+
+    do
+        if NetOk and type(Net) == "table" and type(Net.on) == "function" and type(Net.EVENTS) == "table" then
+            local names, hooked = {}, {}
+            for k, v in pairs(Net.EVENTS) do
+                local n = (type(k) == "string" and k) or (type(v) == "string" and v) or nil
+                if n then
+                    names[#names + 1] = n
+                    local l = string.lower(n)
+                    if l ~= "levelup" and (l:find("xp") or l:find("experience") or l:match("^exp") or l:match("exp$")) then
+                        local ok = pcall(Net.on, n, function(...)
+                            if alive() then pcall(M.onXp, n, ...) end
+                        end)
+                        if ok then hooked[#hooked + 1] = n end
+                    end
+                end
+            end
+            table.sort(names)
+            M.EvNames = table.concat(names, ", ")
+            M.XpEv = #hooked > 0 and table.concat(hooked, ", ") or "tidak ada event XP"
+        else
+            M.XpEv = "Net.EVENTS tidak ada"
+        end
+    end
+
+    -- ---------- tampilan ----------
+    local function dur(sec)
+        sec = math.max(0, math.floor(sec or 0))
+        if sec >= 3600 then return ("%dj%02dm"):format(sec // 3600, sec % 3600 // 60) end
+        return ("%dm%02dd"):format(sec // 60, sec % 60)
+    end
+
+    -- 2-3 baris untuk status Leveling
+    function M.summary()
+        prune(os.clock())
+        local t = ("Ukur   : %d pecah/mnt | level ini %d pecah, %d pukul, %s%s"):format(
+            #M.Times, M.SegBroke, M.SegHits, dur(os.time() - (M.SegT0 or os.time())),
+            M.SegPartial and " (belum lengkap)" or "")
+        local last = M.Laps[#M.Laps]
+        if last then
+            t = t .. ("\nLv lalu: %s%d pecah / %d pukul / %s"):format(
+                last.lv and ("→" .. last.lv .. ": ") or "", last.broke, last.hits, dur(last.sec))
+        end
+        if M.XpN > 0 then
+            t = t .. ("\nXP     : %d dari %d event (%.2f XP/pukul)"):format(math.floor(M.Xp), M.XpN, M.Xp / math.max(1, M.Hits))
+        end
+        return t
+    end
+
+    function M.report()
+        prune(os.clock())
+        local L = {}
+        local ver = tostring(SKYP.version or "")
+        L[#L + 1] = ("=== Laporan XP SkyP %s | %s ==="):format(ver, os.date("%Y-%m-%d %H:%M"))
+        L[#L + 1] = ("Total : %d pukul, %d pecah, %s | laju %d pecah/mnt"):format(
+            M.Hits, M.Broke, dur(os.time() - M.T0), #M.Times)
+        L[#L + 1] = ("Level : %s (sumber %s) | levelUp masuk %d kali"):format(
+            tostring(Clear.Lv.Level or "-"), tostring(Clear.Lv.Src or "-"), Clear.Lv.UpCount or 0)
+        L[#L + 1] = ("Event XP: %s | %d event, %d XP%s"):format(
+            tostring(M.XpEv), M.XpN, math.floor(M.Xp), M.XpMode == "total" and " (event kirim TOTAL XP)" or "")
+
+        -- per putaran level
+        L[#L + 1] = "-- Per level (lengkap) --"
+        if #M.Laps == 0 then
+            L[#L + 1] = "(belum ada: perlu naik level 2x setelah mulai/reset)"
+        else
+            for _, p in ipairs(M.Laps) do
+                L[#L + 1] = ("%s %d pecah, %d pukul, %s%s | %s"):format(
+                    p.lv and ("→Lv " .. p.lv .. ":") or "→Lv ?:", p.broke, p.hits, dur(p.sec),
+                    (p.xp or 0) > 0 and (", " .. math.floor(p.xp) .. " XP") or "", p.top ~= "" and p.top or "-")
+            end
+        end
+        L[#L + 1] = ("Level ini: %d pecah, %d pukul, %s%s"):format(M.SegBroke, M.SegHits,
+            dur(os.time() - (M.SegT0 or os.time())), M.SegPartial and " (belum lengkap)" or "")
+
+        -- per jenis block
+        L[#L + 1] = "-- Per block (pecah | pukul | pukul/pecah | XP/pecah | XP/pukul) --"
+        local list = {}
+        for id, mi in pairs(M.Items) do
+            if mi.b > 0 or mi.h > 0 then list[#list + 1] = { id = id, mi = mi } end
+        end
+        table.sort(list, function(a, b) return a.mi.b > b.mi.b end)
+        for i = 1, math.min(25, #list) do
+            local id, mi = list[i].id, list[i].mi
+            local xpb = mi.xn > 0 and mi.b > 0 and ("%.2f"):format(mi.xp / mi.b) or "-"
+            local xph = mi.xn > 0 and mi.h > 0 and ("%.2f"):format(mi.xp / mi.h) or "-"
+            L[#L + 1] = ("%s [%s] | %d | %d | %.1f | %s | %s"):format(
+                itemName(id), tostring(id), mi.b, mi.h, mi.h / math.max(1, mi.b), xpb, xph)
+        end
+        if #list > 25 then L[#L + 1] = ("... +%d jenis lagi"):format(#list - 25) end
+
+        -- kesimpulan sementara
+        L[#L + 1] = "-- Kesimpulan --"
+        local best = {}
+        for _, e in ipairs(list) do
+            if e.mi.xn >= 5 and e.mi.h > 0 then best[#best + 1] = e end
+        end
+        if #best > 0 then
+            table.sort(best, function(a, b) return a.mi.xp / a.mi.h > b.mi.xp / b.mi.h end)
+            local parts = {}
+            for i = 1, math.min(3, #best) do
+                parts[i] = ("%s %.2f"):format(itemName(best[i].id), best[i].mi.xp / best[i].mi.h)
+            end
+            L[#L + 1] = "XP per pukul terbaik: " .. table.concat(parts, ", ")
+        elseif #M.Laps >= 2 then
+            L[#L + 1] = "Tidak ada event XP. Bandingkan 'pecah' & 'pukul' per level di atas: yang angkanya lebih stabil = dasar hitungan XP"
+        else
+            L[#L + 1] = "Data belum cukup: jalankan Auto Leveling sampai naik level minimal 2x"
+        end
+
+        if #M.XpLog > 0 then
+            L[#L + 1] = "-- Event XP terakhir --"
+            for _, l in ipairs(M.XpLog) do L[#L + 1] = l end
+        end
+        if M.EvNames then L[#L + 1] = "-- Semua event game --\n" .. M.EvNames end
+
+        local txt = table.concat(L, "\n")
+        local clip = setclipboard or toclipboard
+        local copied = false
+        if type(clip) == "function" then copied = pcall(clip, txt) end
+        warn("[SkyP] " .. txt)
+        if UI.LvMeter then
+            local show = {}
+            for i = 1, math.min(18, #L) do show[i] = L[i] end
+            if #L > 18 then show[#show + 1] = ("... +%d baris (lengkap di clipboard / F9)"):format(#L - 18) end
+            pcall(function() UI.LvMeter:SetDesc(table.concat(show, "\n")) end)
+        end
+        return txt, copied
+    end
+
+    function M.reset()
+        M.Hits, M.Broke, M.T0 = 0, 0, os.time()
+        M.Xp, M.XpN, M.XpRaw, M.XpUp, M.XpMode = 0, 0, nil, 0, nil
+        table.clear(M.Items)
+        table.clear(M.Laps)
+        table.clear(M.Times)
+        table.clear(M.XpLog)
+        M.LastBreakId, M.LastBreakAt = nil, 0
+        newSeg(true)
+    end
+
+    -- ---------- dibawa saat pindah world (JSON: key angka dijadikan teks) ----------
+    local function strKeys(t)
+        local o = {}
+        for k, v in pairs(t) do o[tostring(k)] = v end
+        return o
+    end
+    local function numKeys(t)
+        local o = {}
+        if type(t) == "table" then
+            for k, v in pairs(t) do
+                local n = tonumber(k)
+                if n then o[n] = v end
+            end
+        end
+        return o
+    end
+
+    function M.export()
+        return {
+            hits = M.Hits, broke = M.Broke, t0 = M.T0,
+            xp = M.Xp, xpN = M.XpN, xpRaw = M.XpRaw, xpUp = M.XpUp, xpMode = M.XpMode,
+            items = strKeys(M.Items), laps = M.Laps,
+            segHits = M.SegHits, segBroke = M.SegBroke, segXp = M.SegXp, segT0 = M.SegT0,
+            segPartial = M.SegPartial, segItems = strKeys(M.SegItems),
+        }
+    end
+
+    function M.import(d)
+        if type(d) ~= "table" then return end
+        M.Hits, M.Broke = tonumber(d.hits) or 0, tonumber(d.broke) or 0
+        M.T0 = tonumber(d.t0) or os.time()
+        M.Xp, M.XpN = tonumber(d.xp) or 0, tonumber(d.xpN) or 0
+        M.XpRaw, M.XpUp = tonumber(d.xpRaw), tonumber(d.xpUp) or 0
+        M.XpMode = d.xpMode == "total" and "total" or nil
+        M.Items = {}
+        for id, mi in pairs(numKeys(d.items)) do
+            if type(mi) == "table" then
+                M.Items[id] = { b = tonumber(mi.b) or 0, h = tonumber(mi.h) or 0, xp = tonumber(mi.xp) or 0, xn = tonumber(mi.xn) or 0 }
+            end
+        end
+        M.Laps = type(d.laps) == "table" and d.laps or {}
+        M.SegHits, M.SegBroke, M.SegXp = tonumber(d.segHits) or 0, tonumber(d.segBroke) or 0, tonumber(d.segXp) or 0
+        M.SegT0 = tonumber(d.segT0) or os.time()
+        M.SegPartial = d.segPartial ~= false
+        M.SegItems = numKeys(d.segItems)
+    end
+end)() end
+
 -- ===== AUTO LEVELING (v2.9) =====
 -- Siklus: hop ke world acak (huruf A-Z, panjang MinLen..MaxLen, minimal 5) -> cek world bisa dipakai
 -- (ada block, tidak dikunci pemain lain) -> Auto Clear dengan batas gali (tidak sampai lapisan lava)
@@ -18746,6 +19116,7 @@ do (function()
         end
         Lv.UpCount += 1
         Lv.LastUp = table.concat(parts, ", ")
+        if Clear.Meter.lap then pcall(Clear.Meter.lap, found) end -- v2.9.2: tutup 1 putaran level
         local known = okNum(Lv.Known)
         local new
         if found and (not known or (found >= known and found <= known + 5)) then
@@ -18826,6 +19197,7 @@ do (function()
             on = true, at = os.time(), world = world,
             worlds = Lv.Worlds, cleared = Lv.Cleared, level0 = Lv.Level0,
             known = okNum(Lv.Known), knownSrc = Lv.KnownSrc,
+            meter = Clear.Meter.export and select(2, pcall(Clear.Meter.export)) or nil, -- v2.9.2
             cfg = {
                 Target = Lv.Target, MinLen = Lv.MinLen, MaxLen = Lv.MaxLen, MaxMin = Lv.MaxMin,
                 MaxWorlds = Lv.MaxWorlds, HopWait = Lv.HopWait, ClearHere = Lv.ClearHere, LimitPct = Clear.LimitPct,
@@ -19118,6 +19490,7 @@ do (function()
         if kn and kn >= (okNum(Lv.Known) or 0) then
             Lv.Known, Lv.KnownSrc = kn, saved.knownSrc or "isian manual"
         end
+        if type(saved.meter) == "table" and Clear.Meter.import then pcall(Clear.Meter.import, saved.meter) end -- v2.9.2
         Lv.Worlds = (tonumber(saved.worlds) or 0) + 1
         Lv.Cleared = tonumber(saved.cleared) or 0
         Lv.Level0 = tonumber(saved.level0)
@@ -19180,6 +19553,10 @@ do (function()
                     .. "\nWorld  : " .. (Lv.World ~= "" and Lv.World or "-")
                     .. "  | dimasuki " .. Lv.Worlds .. " | selesai " .. Lv.Cleared
                     .. "\nAksi   : " .. tostring(Lv.Status)
+                if Clear.Meter.summary then -- v2.9.2
+                    local okS, m = pcall(Clear.Meter.summary)
+                    if okS and m then txt = txt .. "\n" .. m end
+                end
                 if txt ~= shown then
                     shown = txt
                     pcall(function() UI.LvStatus:SetDesc(txt) end)
