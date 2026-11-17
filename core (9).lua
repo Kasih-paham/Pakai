@@ -3,7 +3,7 @@ local SKYP = ...
 -- Dari loader skyp-guard: SKYP dikirim loader (versi, cek key, onStop) seperti biasa.
 if type(SKYP) ~= "table" then
     SKYP = {
-        version = "v2.9.5",
+        version = "v2.9.8",
         shared = {},                          -- SkyUI pakai versi yang ditanam di bawah
         onStop = {},
         isAlive = function() return true end, -- tanpa loader: tidak ada key yang bisa dicabut
@@ -64,7 +64,7 @@ end
 -- [skyp-guard] Lisensi sekarang dipegang loader (/auth + /hb). Pengecekan lama dimatikan (Off = true).
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
     Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.5" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.8" end
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -1822,6 +1822,7 @@ local State = {
     LiteMode = false,
     PerfMode = "Mati",            -- mode ringan: "Mati" / "Smooth" / "Blank" (lihat MODE RINGAN)
     PerfFps = 30,                 -- batas FPS saat mode ringan nyala (kalau executor punya setfpscap)
+    Queue = true,                 -- v2.9.6: antrian aksi (pukul/panen/tanam dijadwal tepat di batas server, lihat Guard.gate)
     AutoCollect = true,           -- ambil drop di tile yang dipilih
     CollectAround = false,        -- ambil drop di sekitar karakter (radius) kapan saja
     CollectRadius = 3,            -- jari-jari collect (tile), dipakai mode Remote
@@ -2023,6 +2024,24 @@ function Guard.jit(ms)
     return ms * (1 + math.random() * math.clamp(tonumber(Guard.JitPct) or 15, 0, 60) / 100)
 end
 
+-- v2.9.6: ANTRIAN AKSI. Dulu: aksi -> proses -> tidur X ms (waktu proses / jalan ikut menambah jeda).
+-- Sekarang: aksi dijadwal tepat X ms setelah JADWAL aksi sebelumnya, jadi waktu proses tertutup jeda.
+-- Jarak NYATA antar kiriman tidak pernah di bawah floorMs (batas server), walau task.wait telat.
+-- kind: "punch" (pukul + panen, satu jalur) / "place" (tanam, pasang block)
+Guard.Gate = {}
+function Guard.gate(kind, ms, floorMs)
+    local G = Guard.Gate
+    floorMs = tonumber(floorMs) or 0
+    local gap = Guard.jit(math.max(tonumber(ms) or 0, floorMs)) / 1000
+    local now = os.clock()
+    local due = (G[kind] or 0) + gap
+    if due < now - gap then due = now end -- lama tidak ada aksi: mulai sekarang, jangan menumpuk
+    due = math.max(due, (G[kind .. "At"] or 0) + floorMs / 1000)
+    if due > now then task.wait(due - now) end
+    G[kind] = due
+    G[kind .. "At"] = os.clock()
+end
+
 -- Farmer: panen & tanam otomatis
 local Farmer = {
     Running = false,
@@ -2044,6 +2063,7 @@ local Farmer = {
     Dropped = 0,
     Got = {},           -- seed pohon yang pernah dipanen (untuk cari item hasil panen)
     Row = {},           -- baris tanam yang sedang dikerjakan (tanam rapi per baris)
+    Stay = false,       -- v2.9.6: Farm Diam: tidak jalan, panen & tanam semua tile dalam jangkauan saja
 }
 
 -- Tombol gerak buatan (dipakai Clear & Farmer)
@@ -2284,7 +2304,7 @@ end)() end
 
 Config.add("Farm", State, {
     "Mode", "PlaceMs", "BreakMs", "AfterBreakMs", "HitsOverride", "SelectedId", "Offsets",
-    "CalibX", "CalibY", "AntiAfk", "MutePunch", "Visual", "LiteMode", "PerfMode", "PerfFps", "AutoCollect", "MultiTarget", "Fast",
+    "CalibX", "CalibY", "AntiAfk", "MutePunch", "Visual", "LiteMode", "PerfMode", "PerfFps", "Queue", "AutoCollect", "MultiTarget", "Fast",
     "CollectAround", "CollectRadius", "CollectMode", "RemoteReach", "RemoteChase", "CollectAuto",
     "SeedDrop", "SeedDropAt", "SeedKeep", "AutoRefill", "RefillRadius", "AutoReturn",
 })
@@ -2292,7 +2312,7 @@ Config.add("Clear", Clear, { "UseBlock", "ScaffoldId", "Collect", "Sweep", "Limi
 Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere", "Known",
     "MaxHits", "MinRate", "SlowPct", "AvoidPlayers" })
 Config.add("Farmer", Farmer, {
-    "Harvest", "Plant", "Collect", "UseBlock", "ScaffoldId", "HarvestMs", "PlantMs", "SeedId",
+    "Harvest", "Plant", "Collect", "UseBlock", "ScaffoldId", "HarvestMs", "PlantMs", "SeedId", "Stay",
 })
 -- update 1084: game memberi jeda minimal antar aksi (place ~0.135 dtk, pukul ~0.19 dtk)
 State.PlaceMs = math.max(State.PlaceMs, 140)
@@ -3122,6 +3142,34 @@ local getUpvalues -- (didefinisikan di bawah)
 
 -- Fungsi tangan game dipanggil dari fungsi gambar yang terhubung ke RenderStepped:
 -- cukup periksa upvalue fungsi-fungsi itu (jauh lebih ringan dari scan getgc).
+-- Game v1945: variabel modul game dikemas dalam satu tabel bersama S (kunci teks). Fungsi tangan = S.aimArm
+-- (atau fungsi lain di S yang cocok ciri tangan), "aksi terakhir" = S.action ({t, x, y, facing} atau kosong).
+-- Anim.set dibuat berbentuk sama dengan setupvalue (fn, kunci, nilai) supaya Anim.swing tidak perlu diubah.
+function Anim.bindShared(S)
+    if type(S) ~= "table" or type((next(S))) ~= "string" or rawget(S, "fg") ~= nil then return false end
+    if type(rawget(S, "ARM_OUT")) ~= "number" then return false end
+    local arm = rawget(S, "aimArm")
+    if not (type(arm) == "function" and Anim.isArmFn(arm)) then
+        arm = nil
+        local n = 0
+        for _, v in next, S do
+            n += 1
+            if n > 800 then break end
+            if type(v) == "function" and Anim.isArmFn(v) then
+                arm = v
+                break
+            end
+        end
+    end
+    if not arm then return false end
+    local cur = rawget(S, "action")
+    if not (cur == nil or (type(cur) == "table" and rawget(cur, "t") ~= nil)) then return false end
+    Refs.Arm = arm
+    Anim.fn, Anim.idx = arm, "action"
+    Anim.set = function(_, key, val) rawset(S, key, val) end
+    return true
+end
+
 function Anim.findFast()
     if not getconnections or Anim.fn then return Anim.fn ~= nil end
     for _, name in ipairs({ "RenderStepped", "Heartbeat", "PreRender", "Stepped" }) do
@@ -3137,6 +3185,10 @@ function Anim.findFast()
                                 Refs.Arm = u
                                 return Anim.bind(u)
                             end
+                        end
+                        -- Game v1945: fungsi tangan (aimArm) & "aksi terakhir" ada di tabel bersama
+                        for _, u in pairs(getUpvalues(fn)) do
+                            if type(u) == "table" and Anim.bindShared(u) then return true end
                         end
                     end
                 end
@@ -4103,13 +4155,18 @@ local function farmLoop(runId)
         if doPlace then
             for _, t in ipairs(tiles) do
                 if not State.Running or State.DropPause then break end
+                -- v2.9.7: antrian aksi: jadwal SEBELUM place (hanya tile yang memang kosong)
+                if State.Queue and tileAt("fg", t.x, t.y) == 0 then
+                    Guard.gate("place", State.PlaceMs, 140)
+                    if not (State.Running and alive()) or State.DropPause then break end
+                end
                 local r = tryPlace(t.x, t.y)
                 if r == "habis" then
                     outOfBlock = true
                     break
                 elseif r == "place" then
                     acted = true
-                    if not waitMs(State.PlaceMs) then break end
+                    if not State.Queue and not waitMs(State.PlaceMs) then break end
                 end
             end
         end
@@ -4136,6 +4193,12 @@ local function farmLoop(runId)
                 end
                 if not rayDir then hits = { active[1] } end -- giliran depan antrian
 
+                -- v2.9.7: antrian aksi: jadwal SEBELUM pukul (Rayman tetap pakai jedanya sendiri)
+                local gated = State.Queue and not rayDir and breakableAt(hits[1].x, hits[1].y) -- tile kosong: tidak perlu tunggu
+                if gated then
+                    Guard.gate("punch", State.BreakMs, 200)
+                    if not (State.Running and alive()) or State.DropPause then break end
+                end
                 local t0 = os.clock()
                 if rayDir then raymanAct(rayDir) end
                 local hit, broke = false, false
@@ -4164,7 +4227,7 @@ local function farmLoop(runId)
                 end
                 active = nextActive
 
-                if hit then
+                if hit and not gated then
                     local gap = Guard.jit(math.max(State.BreakMs, 200)) / 1000 -- server hanya terima ~1 pukulan / 0.22 dtk
                     if rayDir then gap = math.max(gap, 0.35) end -- jeda Rayman asli
                     if State.Fast then
@@ -4183,7 +4246,8 @@ local function farmLoop(runId)
                     if not (State.Running and alive()) then break end
                 end
                 -- drop diambil otomatis oleh collector cepat
-                if broke and not State.Fast and State.AfterBreakMs > 0 then task.wait(State.AfterBreakMs / 1000) end
+                -- (antrian aksi: tidak menunggu tiap block pecah, drop diambil di awal putaran berikutnya)
+                if broke and not State.Fast and not State.Queue and State.AfterBreakMs > 0 then task.wait(State.AfterBreakMs / 1000) end
             end
         end
 
@@ -5919,6 +5983,12 @@ local function clearBreakTile(t)
     while Clear.Running and alive() do
         layer, id = clearLayerAt(x, y)
         if not layer then return end
+        if State.Queue then -- v2.9.6: tunggu jadwal SEBELUM pukul (bukan tidur sesudahnya)
+            Guard.gate("punch", State.BreakMs, 200)
+            if not autoOn() then return end
+            layer, id = clearLayerAt(x, y)
+            if not layer then return end
+        end
         local r = tryBreak(x, y, Clear.IncludeBg)
         if r == nil then
             skipTile(Clear.Skip, idx, 60)
@@ -5943,7 +6013,11 @@ local function clearBreakTile(t)
                 return
             end
         end
-        if not waitAuto(State.BreakMs) then return end
+        if not State.Queue then
+            if not waitAuto(State.BreakMs) then return end
+        elseif not autoOn() then
+            return
+        end
         if r == "broke" then
             local s = playerState()
             if not s or not s.grounded then return end -- jatuh, cek ulang posisi
@@ -6167,6 +6241,7 @@ end
 -- Seed ditanam di tile kosong yang di bawahnya ada block.
 local function findTreeRefs()
     Refs.Trees, Refs.TreeMode, Refs.TreeP = nil, nil, nil
+    Refs.TreeHost, Refs.TreeKey = nil, nil
     -- 1) cara utama (game v1159+): ikuti fungsi World.tileChanged -> fungsi simpan pohon.
     --    Tetap jalan walau world belum punya pohon (tabel kosong).
     local okS, foundS = pcall(function() return Auto.findTreesStruct and Auto.findTreesStruct() end)
@@ -6232,6 +6307,17 @@ function Auto.findTreesStruct()
         for _, u in pairs(ups) do
             if type(u) == "table" and u ~= w then tset[u] = true end
         end
+        -- Game v1945: variabel modul game dikemas dalam SATU tabel bersama (satu-satunya upvalue tileChanged),
+        -- data pohon = <tabel bersama>.trees. Tabel bersama ikut dicatat (TreeHost) supaya kalau game mengganti
+        -- tabel pohonnya (pindah world), yang baru langsung terbaca (lihat Auto.treeEntry).
+        for u in pairs(tset) do
+            local tr = rawget(u, "trees")
+            if type(tr) == "table" and Auto.treeTableOk(tr) then
+                Refs.Trees, Refs.TreeMode, Refs.TreeP = tr, "idx", "p"
+                Refs.TreeHost, Refs.TreeKey = u, "trees"
+                return true
+            end
+        end
         for _, g in pairs(ups) do
             if type(g) == "function" then
                 local gu = getUpvalues(g)
@@ -6267,6 +6353,14 @@ end
 function Auto.treeEntry(x, y)
     local t, w = Refs.Trees, Refs.World
     if not t or not w then return nil end
+    local host = Refs.TreeHost
+    if host then -- tabel pohon diganti game (pindah world): pakai yang sekarang
+        local cur = rawget(host, Refs.TreeKey)
+        if type(cur) == "table" and cur ~= t then
+            Refs.Trees = cur
+            t = cur
+        end
+    end
     local mode = Refs.TreeMode or "idx"
     local e
     if mode == "xy" then
@@ -6356,6 +6450,24 @@ function Auto.findTreesDeep()
         if mode then
             Refs.Trees, Refs.TreeMode, Refs.TreeP = t, mode, pk
             return true
+        end
+        -- Game v1945: variabel modul game dikemas dalam SATU tabel bersama (kunci teks, ratusan isi) yang jadi
+        -- satu-satunya upvalue fungsi World. Tabel pohon ada DI DALAM tabel itu, jadi isinya ikut diperiksa (1 tingkat).
+        if rawget(t, "fg") == nil and type((next(t))) == "string" then
+            local n = 0
+            for k, sub in next, t do
+                n += 1
+                if n > 600 then break end
+                if type(sub) == "table" and sub ~= w and not seenT[sub] then
+                    seenT[sub] = true
+                    local m2, pk2 = Auto.treeShape(sub)
+                    if m2 then
+                        Refs.Trees, Refs.TreeMode, Refs.TreeP = sub, m2, pk2
+                        Refs.TreeHost, Refs.TreeKey = t, k
+                        return true
+                    end
+                end
+            end
         end
         return false
     end
@@ -6470,6 +6582,7 @@ local function farmerCfg()
         exclude = nil,   -- [idx] = true: jangan tanam di tile ini
         row = Farmer.Row,        -- tanam rapi per baris
         collect = Farmer.Collect, -- ambil drop panen dulu sebelum lanjut
+        stay = Farmer.Stay,      -- v2.9.6: Farm Diam (Pabrik tidak memakai ini)
         status = function(t) Farmer.Status = t end,
         onHarvest = function(id)
             Farmer.Harvested += 1
@@ -6511,6 +6624,7 @@ local function farmerWorkInReach(s)
     local st = workspace:GetServerTimeNow()
     local doPlant = FC.plant and fcSeeds() > 0
     local harvest, plant = {}, {}
+    local nextReady = nil -- v2.9.6: detik ke pohon berikutnya siap (dalam jangkauan)
     local bx, by = floor(s.x), floor(cy)
     for ty = math.max(0, floor(cy - R - 0.5)), math.min(floor(cy + R + 0.5), w.h - 1) do
         for tx = math.max(0, floor(cx - R - 0.5)), math.min(floor(cx + R + 0.5), W - 1) do
@@ -6526,8 +6640,10 @@ local function farmerWorkInReach(s)
                             else
                                 skipTile(FC.skip, idx, 120)
                             end
+                        elseif ra and ra > st and (not nextReady or ra - st < nextReady) then
+                            nextReady = ra - st
                         end
-                    elseif doPlant and id == 0 and fcPlantOk(idx) and (not FC.row or FC.row.y == ty)
+                    elseif doPlant and id == 0 and fcPlantOk(idx) and (FC.stay or not FC.row or FC.row.y == ty)
                         and plantSpotOk(tx, ty, FC.seed) then
                         plant[#plant + 1] = { x = tx, y = ty, idx = idx }
                     end
@@ -6543,10 +6659,15 @@ local function farmerWorkInReach(s)
     table.sort(plant, byX)
 
     local done, got = 0, 0
+    local queue = State.Queue -- v2.9.6
     for _, t in ipairs(harvest) do
         if not FC.run() or not alive() then return done end
         local cur = playerState()
         if not cur or not stateReaches(cur, t.x, t.y, R) then break end
+        if queue then
+            Guard.gate("punch", FC.hms, 140)
+            if not FC.run() or not alive() then return done end
+        end
         local id = fgIdAt(t.x, t.y)
         local r = tryBreak(t.x, t.y, false) -- pohon siap: 1 pukulan = panen
         if r == "broke" then
@@ -6557,10 +6678,15 @@ local function farmerWorkInReach(s)
             skipTile(FC.skip, t.idx, 30)
         end
         done += 1
-        if not waitAuto(FC.hms) then return done end
+        if queue then
+            if not autoOn() then return done end
+        elseif not waitAuto(FC.hms) then
+            return done
+        end
     end
     -- ambil hasil panen dulu sebelum pindah / tanam
-    if got > 0 and FC.collect then
+    -- (Farm Diam: tidak jalan, drop diambil collector di sekitar karakter sambil lanjut tanam)
+    if got > 0 and FC.collect and not FC.stay then
         FC.status("Ambil hasil panen...")
         task.wait(0.25) -- drop panen muncul sedikit terlambat
         if not FC.run() or not alive() then return done end
@@ -6573,12 +6699,20 @@ local function farmerWorkInReach(s)
         local cur = playerState()
         if not cur or not stateReaches(cur, t.x, t.y, R) then return done end
         if fgIdAt(t.x, t.y) == 0 then
+            if queue then
+                Guard.gate("place", FC.pms, 140)
+                if not FC.run() or not alive() or fgIdAt(t.x, t.y) ~= 0 then return done end
+            end
             if not plantSeed(t.x, t.y) then break end
             done += 1
-            if not waitAuto(FC.pms) then return done end
+            if queue then
+                if not autoOn() then return done end
+            elseif not waitAuto(FC.pms) then
+                return done
+            end
         end
     end
-    return done
+    return done, nextReady
 end
 
 -- Cari target + kapan pohon berikutnya siap.
@@ -6688,6 +6822,7 @@ local function updateFarmerStatus()
     local txt = "Status  : " .. (Farmer.Running and "JALAN" or "BERHENTI")
         .. "\nPanen   : " .. Farmer.Harvested .. "  | tanam: " .. Farmer.Planted .. "  | collect: " .. State.Collected
         .. "\nSeed    : " .. (seed and (itemName(seed) .. " x" .. invCount(seed)) or "-")
+        .. "\nMode    : " .. (Farmer.Stay and "Farm Diam (tidak jalan)" or "Keliling") .. " | antrian " .. (State.Queue and "nyala" or "mati")
         .. "\nPohon   : " .. (Refs.Trees and "terbaca" or "TIDAK terbaca (harvest mati)")
         .. "\nPijakan : " .. blockText(Farmer.UseBlock, Farmer.ScaffoldId)
         .. "\nDrop    : " .. ((Pabrik.pointSet and Pabrik.pointSet()) and ("otomatis saat >= " .. Farmer.DropAt
@@ -6737,6 +6872,11 @@ local function fieldStep()
     end
     Move.AirAt = nil
     releaseInput()
+    if FC.stay then -- v2.9.6: Farm Diam: hanya yang terjangkau dari sini, tidak pernah jalan
+        local n, nr = farmerWorkInReach(s)
+        if n > 0 then return "work" end
+        return "idle", nr
+    end
     if farmerWorkInReach(s) > 0 then return "work" end
     local R = farmReach() - 0.35
     local useBlock = scaffoldId() ~= nil
@@ -6812,8 +6952,11 @@ local function farmerLoop()
             if Farmer.Plant then
                 parts[#parts + 1] = (seedCount() <= 0) and "seed habis / belum dipilih" or "tidak ada tempat tanam"
             end
-            Farmer.Status = "Menunggu: " .. table.concat(parts, ", ")
-            if not waitAuto(1000) then break end
+            Farmer.Status = (Farmer.Stay and "Farm Diam | " or "") .. "Menunggu: " .. table.concat(parts, ", ")
+            -- Farm Diam: bangun tepat saat pohon berikutnya siap (pohon cepat = siklus beberapa detik)
+            local idleMs = 1000
+            if Farmer.Stay and nextReady then idleMs = math.clamp(nextReady * 1000 + 50, 50, 1000) end
+            if not waitAuto(idleMs) then break end
         end
     end
     releaseInput()
@@ -11051,6 +11194,16 @@ safe(function()
     })
 end)
 
+safe(function()
+    Box.FarmerCtl:Toggle({
+        Title = "Farm Diam (tidak jalan)",
+        Desc = "Berdiri di satu titik: panen semua pohon siap dalam jangkauan, lalu tanam semua tile kosong. "
+            .. "Pakai lahan kecil di sekitar karakter + seed cepat tumbuh. Drop diambil collector (paling cocok mode Remote)",
+        Value = Farmer.Stay,
+        Callback = function(on) Farmer.Stay = on end,
+    })
+end)
+
 addNumber(Box.FarmerSpeed, {
     Title = "Speed Harvest (ms)",
     Desc = "Jeda setelah tiap panen",
@@ -11149,6 +11302,17 @@ addNumber(OptTab, {
     Min = 10, Max = 60, Step = 5, Default = State.PerfFps,
     Callback = function(v) State.PerfFps = math.clamp(math.floor(v), 10, 60) end,
 })
+
+safe(function()
+    OptTab:Toggle({
+        Title = "Antrian aksi",
+        Desc = "Farm (place & break), Clear World & Farmer: aksi dijadwal tepat di batas jeda, waktu proses tidak menambah jeda, "
+            .. "jeda setelah block pecah dilewati. "
+            .. "Tidak pernah lebih cepat dari batas server. Matikan kalau ada masalah",
+        Value = State.Queue,
+        Callback = function(on) State.Queue = on end,
+    })
+end)
 
 safe(function()
     OptTab:Toggle({
