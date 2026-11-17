@@ -3,7 +3,7 @@ local SKYP = ...
 -- Dari loader skyp-guard: SKYP dikirim loader (versi, cek key, onStop) seperti biasa.
 if type(SKYP) ~= "table" then
     SKYP = {
-        version = "v2.9.4",
+        version = "v2.9.5",
         shared = {},                          -- SkyUI pakai versi yang ditanam di bawah
         onStop = {},
         isAlive = function() return true end, -- tanpa loader: tidak ada key yang bisa dicabut
@@ -64,7 +64,7 @@ end
 -- [skyp-guard] Lisensi sekarang dipegang loader (/auth + /hb). Pengecekan lama dimatikan (Off = true).
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
     Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.4" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.5" end
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -1894,6 +1894,9 @@ local Clear = {
         MinRate = 40,         -- pindah world kalau laju < sekian pecah/menit ...
         SlowPct = 50,         -- ... atau < sekian % dari laju terbaik di world ini
         SlowHops = 0,         -- pindah world karena laju turun (sesi ini)
+        -- v2.9.5: world yang ada pemain lain dilewati / ditinggal (pemilik world bisa report)
+        AvoidPlayers = true,
+        PlayerHops = 0,       -- pindah world karena ada pemain (sesi ini)
         Worlds = 0,           -- world yang sudah dimasuki sesi ini
         Cleared = 0,          -- world yang selesai di-clear
         Level = nil,          -- level terakhir yang terbaca
@@ -2287,7 +2290,7 @@ Config.add("Farm", State, {
 })
 Config.add("Clear", Clear, { "UseBlock", "ScaffoldId", "Collect", "Sweep", "LimitOn", "LimitPct" })
 Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere", "Known",
-    "MaxHits", "MinRate", "SlowPct" })
+    "MaxHits", "MinRate", "SlowPct", "AvoidPlayers" })
 Config.add("Farmer", Farmer, {
     "Harvest", "Plant", "Collect", "UseBlock", "ScaffoldId", "HarvestMs", "PlantMs", "SeedId",
 })
@@ -10916,6 +10919,14 @@ safe(function()
     })
 end)
 safe(function()
+    Box.ClearLv:Toggle({
+        Title = "Hindari pemain lain",
+        Desc = "World yang ada pemain lain dilewati. Ada pemain masuk saat clear = langsung pindah world (pemilik world bisa report)",
+        Value = Clear.Lv.AvoidPlayers,
+        Callback = function(on) Clear.Lv.AvoidPlayers = on end,
+    })
+end)
+safe(function()
     Box.ClearLv:Button({
         Title = "Cek level",
         Desc = "Cari angka level di game. Hasil tampil di bawah & disalin ke clipboard (tempel ke developer)",
@@ -19529,6 +19540,17 @@ do (function()
 
     local function upper(s) return string.upper(tostring(s or "")) end
 
+    -- v2.9.5: nama pemain lain di world ini (nil = tidak ada / fitur mati)
+    local function otherPlayers()
+        if not Lv.AvoidPlayers or type(Guard.playersHere) ~= "function" then return nil end
+        local ok, list = pcall(Guard.playersHere)
+        if not ok or type(list) ~= "table" or #list == 0 then return nil end
+        local parts = {}
+        for i = 1, math.min(3, #list) do parts[i] = tostring(list[i].name) end
+        if #list > 3 then parts[#parts + 1] = "+" .. (#list - 3) end
+        return table.concat(parts, ", ")
+    end
+
     -- ---------- lanjut setelah pindah world ----------
     -- Pindah world di game ini = teleport ke server lain: script mati, lalu dijalankan lagi oleh
     -- queue_on_teleport (Rejoin.queueScript). Sebelum pindah, keadaan disimpan di file; script baru
@@ -19544,11 +19566,13 @@ do (function()
             worlds = Lv.Worlds, cleared = Lv.Cleared, level0 = Lv.Level0,
             known = okNum(Lv.Known), knownSrc = Lv.KnownSrc,
             upCount = Lv.UpCount, slowHops = Lv.SlowHops, -- v2.9.3
+            playerHops = Lv.PlayerHops, -- v2.9.5
             meter = Clear.Meter.export and select(2, pcall(Clear.Meter.export)) or nil, -- v2.9.2
             cfg = {
                 Target = Lv.Target, MinLen = Lv.MinLen, MaxLen = Lv.MaxLen, MaxMin = Lv.MaxMin,
                 MaxWorlds = Lv.MaxWorlds, HopWait = Lv.HopWait, ClearHere = Lv.ClearHere, LimitPct = Clear.LimitPct,
                 MaxHits = Lv.MaxHits, MinRate = Lv.MinRate, SlowPct = Lv.SlowPct,
+                AvoidPlayers = Lv.AvoidPlayers,
             },
         }
         return (pcall(function()
@@ -19699,6 +19723,13 @@ do (function()
                     phase = "hop"
                     continue
                 end
+                local who = otherPlayers() -- v2.9.5
+                if who then
+                    Lv.PlayerHops += 1
+                    set(("Lewati %s: ada pemain (%s)"):format(upper(Guard.worldName()), who))
+                    phase = "hop"
+                    continue
+                end
                 Lv.World = upper(Guard.worldName())
                 Auto.startClear()
                 if not Clear.Running then
@@ -19715,7 +19746,13 @@ do (function()
                     pausedAt = nil
                     local inside = Guard.inWorld() and playerState() ~= nil
                     if inside then outAt = nil else outAt = outAt or os.clock() end
-                    if outAt and os.clock() - outAt > 15 then
+                    local who = inside and otherPlayers() or nil -- v2.9.5
+                    if who then
+                        Lv.PlayerHops += 1
+                        stopClear(("Ada pemain masuk (%s)"):format(who))
+                        set(("Tinggalkan %s: ada pemain (%s)"):format(Lv.World, who))
+                        phase = "hop"
+                    elseif outAt and os.clock() - outAt > 15 then
                         stopClear("Keluar dari world")
                         phase = "hop"
                     elseif os.clock() - clearAt > (tonumber(Lv.MaxMin) or 10) * 60 then
@@ -19825,6 +19862,7 @@ do (function()
         Lv.On = true
         Lv.Worlds, Lv.Cleared = 0, 0
         Lv.SlowHops = 0
+        Lv.PlayerHops = 0
         Lv.Level0 = lv
         Lv.World = ""
         set(lv and ("Mulai (level " .. lv .. ")") or "Mulai (level belum terbaca)")
@@ -19859,6 +19897,8 @@ do (function()
         num("MaxHits", 0, 30) num("MinRate", 0, 200) num("SlowPct", 0, 95) -- v2.9.3
         Lv.UpCount = tonumber(saved.upCount) or Lv.UpCount or 0
         Lv.SlowHops = tonumber(saved.slowHops) or 0
+        Lv.PlayerHops = tonumber(saved.playerHops) or 0 -- v2.9.5
+        if type(c.AvoidPlayers) == "boolean" then Lv.AvoidPlayers = c.AvoidPlayers end
         if type(c.ClearHere) == "boolean" then Lv.ClearHere = c.ClearHere end
         local lp = tonumber(c.LimitPct)
         if lp then Clear.LimitPct = math.clamp(math.floor(lp), 10, 100) end
@@ -19927,7 +19967,7 @@ do (function()
                     .. "\nLevel  : " .. lvTxt .. "  (awal " .. tostring(Lv.Level0 or "-") .. ", target " .. tostring(Lv.Target) .. ")"
                     .. (Lv.Src and ("\nSumber : " .. Lv.Src) or "")
                     .. "\nWorld  : " .. (Lv.World ~= "" and Lv.World or "-")
-                    .. "  | dimasuki " .. Lv.Worlds .. " | selesai " .. Lv.Cleared .. " | pindah karena lambat " .. (Lv.SlowHops or 0)
+                    .. "  | dimasuki " .. Lv.Worlds .. " | selesai " .. Lv.Cleared .. " | pindah: lambat " .. (Lv.SlowHops or 0) .. ", ada pemain " .. (Lv.PlayerHops or 0)
                     .. "\nAksi   : " .. tostring(Lv.Status)
                 if Clear.Meter.summary then -- v2.9.2
                     local okS, m = pcall(Clear.Meter.summary)
