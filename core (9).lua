@@ -3,7 +3,7 @@ local SKYP = ...
 -- Dari loader skyp-guard: SKYP dikirim loader (versi, cek key, onStop) seperti biasa.
 if type(SKYP) ~= "table" then
     SKYP = {
-        version = "v2.9.8",
+        version = "v2.9.9",
         shared = {},                          -- SkyUI pakai versi yang ditanam di bawah
         onStop = {},
         isAlive = function() return true end, -- tanpa loader: tidak ada key yang bisa dicabut
@@ -64,7 +64,7 @@ end
 -- [skyp-guard] Lisensi sekarang dipegang loader (/auth + /hb). Pengecekan lama dimatikan (Off = true).
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
     Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.8" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.9" end
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -1898,6 +1898,17 @@ local Clear = {
         -- v2.9.5: world yang ada pemain lain dilewati / ditinggal (pemilik world bisa report)
         AvoidPlayers = true,
         PlayerHops = 0,       -- pindah world karena ada pemain (sesi ini)
+        -- v2.9.9: di bawah level 10 seed tidak bisa di-drop -> Dirt Seed + Cave Background Seed dihabiskan
+        -- dengan tanam + splice di world sendiri (pohon hasil splice dipanen di kunjungan berikutnya)
+        SpliceOn = true,
+        SpliceWorld = "",     -- "WORLD" / "WORLD:ID" (masuk lewat pintu ID)
+        SpliceMin = 150,      -- pergi splice kalau KEDUA seed sudah sebanyak ini
+        SpliceMaxLv = 10,     -- splice hanya di bawah level ini
+        SpliceHarvest = true, -- panen pohon hasil splice yang sudah siap
+        SpliceTree = nil,     -- id pohon hasil splice (dipelajari dari splice pertama)
+        SpliceVisits = 0,
+        SpliceLast = "-",
+        SpliceWaitUntil = 0,  -- os.time(): jangan kembali sebelum ini (tempat penuh / gagal masuk)
         Worlds = 0,           -- world yang sudah dimasuki sesi ini
         Cleared = 0,          -- world yang selesai di-clear
         Level = nil,          -- level terakhir yang terbaca
@@ -2310,7 +2321,8 @@ Config.add("Farm", State, {
 })
 Config.add("Clear", Clear, { "UseBlock", "ScaffoldId", "Collect", "Sweep", "LimitOn", "LimitPct" })
 Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere", "Known",
-    "MaxHits", "MinRate", "SlowPct", "AvoidPlayers" })
+    "MaxHits", "MinRate", "SlowPct", "AvoidPlayers",
+    "SpliceOn", "SpliceWorld", "SpliceMin", "SpliceMaxLv", "SpliceHarvest", "SpliceTree" })
 Config.add("Farmer", Farmer, {
     "Harvest", "Plant", "Collect", "UseBlock", "ScaffoldId", "HarvestMs", "PlantMs", "SeedId", "Stay",
 })
@@ -7061,6 +7073,7 @@ local function spliceOnce(x, y)
         pcall(function() Refs.Inv:remove(Splice.B, 1) end)
         if Refs.SetTile then pcall(Refs.SetTile, "fg", x, y, made, true) end -- ganti di layar saja
         Splice.Made += 1
+        Splice.LastMade = made -- v2.9.9: id pohon hasil splice (dipakai Auto Leveling untuk panen)
         Splice.Status = ("Splice jadi %s (%d,%d)"):format(itemName(made), x, y)
         return true
     end
@@ -7093,34 +7106,91 @@ local function spliceTile(t)
 end
 
 local function spliceWorkInReach(s)
+    -- v2.9.9: dulu 1 tile sampai selesai (tanam -> tunggu -> splice -> tunggu -> tile berikutnya).
+    -- Sekarang seperti Pabrik: TANAM semua tile kosong dalam jangkauan dulu, lalu SPLICE semua pohon A.
+    -- Jeda pakai antrian aksi (Guard.gate) kalau nyala, jadi waktu proses / balasan server tertutup jeda.
     local w = Refs.World
     local W = w.w
     local R = farmReach() - 0.08
     local cx, cy = s.x, s.y - 0.475
     local now = os.clock()
     local st = workspace:GetServerTimeNow()
-    local list = {}
+    local plants, splices = {}, {}
     for ty = math.max(0, floor(cy - R - 0.5)), math.min(floor(cy + R + 0.5), w.h - 1) do
         for tx = math.max(0, floor(cx - R - 0.5)), math.min(floor(cx + R + 0.5), W - 1) do
             if stateReaches(s, tx, ty, R) then
                 local idx = ty * W + tx
-                if Splice.Row.y == ty and not skipped(Splice.Skip, idx, now) and spliceKind(tx, ty, st) then
-                    list[#list + 1] = { x = tx, y = ty, idx = idx }
+                if not skipped(Splice.Skip, idx, now) then
+                    local k = spliceKind(tx, ty, st)
+                    if k == "plant" then
+                        plants[#plants + 1] = { x = tx, y = ty, idx = idx }
+                    elseif k == "splice" then
+                        splices[#splices + 1] = { x = tx, y = ty, idx = idx }
+                    end
                 end
             end
         end
     end
-    table.sort(list, function(a, b)
-        if a.x ~= b.x then return a.x < b.x end
-        return a.y < b.y
-    end)
+    local function byRow(a, b)
+        if a.y ~= b.y then return a.y < b.y end
+        return a.x < b.x
+    end
+    table.sort(plants, byRow)
+    table.sort(splices, byRow)
+    local A = Splice.A
+    local queue = State.Queue
     local done = 0
-    for _, t in ipairs(list) do
+    -- 1) tanam semua (secukupnya: tiap pohon A butuh 1 seed B)
+    local _, b0 = spliceInv()
+    local budget = b0 - #splices
+    for _, t in ipairs(plants) do
         if not Splice.Roaming or not alive() then return done end
+        if budget <= 0 or invCount(A) <= 0 then break end
         local cur = playerState()
-        if not cur or not stateReaches(cur, t.x, t.y, R) then return done end
-        if not spliceTile(t) then return done end
+        if not cur or not stateReaches(cur, t.x, t.y, R) then break end
+        if fgIdAt(t.x, t.y) == 0 then
+            if queue then
+                Guard.gate("place", Splice.Ms, 140)
+                if not Splice.Roaming or fgIdAt(t.x, t.y) ~= 0 then continue end
+            end
+            sendSetTile("fg", t.x, t.y, A)
+            pcall(function() Refs.Inv:remove(A, 1) end)
+            Splice.Planted += 1
+            Splice.Status = ("Tanam %s (%d,%d)"):format(itemName(A), t.x, t.y)
+            t.at = os.clock()
+            splices[#splices + 1] = t
+            budget -= 1
+            done += 1
+            if not queue and not waitAuto(Splice.Ms) then return done end
+        end
+    end
+    -- 2) splice semua pohon A (yang sudah ada + yang barusan ditanam)
+    for _, t in ipairs(splices) do
+        if not Splice.Roaming or not alive() then return done end
+        if invCount(Splice.B) <= 0 then break end
+        local cur = playerState()
+        if not cur or not stateReaches(cur, t.x, t.y, R) then break end
+        if fgIdAt(t.x, t.y) ~= A then
+            skipTile(Splice.Skip, t.idx, 30)
+            continue
+        end
+        if t.at then -- baru ditanam: beri waktu server mencatat pohonnya
+            local age = os.clock() - t.at
+            if age < 0.3 then task.wait(0.3 - age) end
+        end
+        if queue then Guard.gate("splice", Splice.Ms, 140) end
+        local ok, why = spliceOnce(t.x, t.y)
+        if not ok then
+            SpliceFail[t.idx] = (SpliceFail[t.idx] or 0) + 1
+            skipTile(Splice.Skip, t.idx, 60)
+            Splice.Status = ("Gagal splice (%d,%d): %s"):format(t.x, t.y, tostring(why))
+        end
         done += 1
+        if queue then
+            if not autoOn() then return done end
+        elseif not waitAuto(Splice.Ms) then
+            return done
+        end
     end
     return done
 end
@@ -9133,6 +9203,94 @@ Auto.seedOfBlock = seedOfBlock
 Auto.blockOfSeed = blockOfSeed
 Auto.parseDropTarget = parseDropTarget
 
+-- v2.9.9: 1 kunjungan splice untuk Auto Leveling (di world splice, karakter sudah di dalam):
+--   1) panen pohon hasil splice yang sudah siap (opt.tree), 2) tanam A + splice B sampai seed / tempat habis.
+-- Hasil: { harvested, planted, made, why }
+function Auto.lvSpliceVisit(opt)
+    local live = opt.live or function() return alive() end
+    local status = opt.status or function() end
+    local res = { harvested = 0, planted = 0, made = 0, why = "selesai" }
+    if not OrigIsDown then
+        res.why = "kontrol gerak game (WorldMenu.isDown) tidak ketemu"
+        return res
+    end
+    if not Refs.Trees then pcall(findTreeRefs) end
+    local oldA, oldB, oldFC = Splice.A, Splice.B, FC
+    local p0, m0 = Splice.Planted, Splice.Made
+    Splice.Roaming = true -- mesin splice & gerak (autoOn) jalan; Splice.Running tetap mati
+    autoBegin()
+    local ok, err = pcall(function()
+        -- 1) panen
+        if opt.harvest and opt.tree then
+            FC = {
+                run = live, harvest = true, plant = false, seed = nil, skip = {},
+                hms = Farmer.HarvestMs, pms = Farmer.PlantMs, only = opt.tree, collect = true,
+                status = function(t) status(t) end,
+                onHarvest = function() res.harvested += 1 end,
+                onPlant = function() end,
+            }
+            local t0 = os.clock()
+            while live() and os.clock() - t0 < (opt.harvestSec or 180) do
+                if fieldStep() == "idle" then break end
+                task.wait()
+            end
+            FC = oldFC
+        end
+        -- 2) tanam A + splice B
+        Splice.A, Splice.B = opt.A, opt.B
+        table.clear(Splice.Row)
+        table.clear(Splice.Skip)
+        table.clear(SpliceFail)
+        table.clear(BadEdge)
+        local t0, limit = os.clock(), opt.spliceSec or 480
+        while live() do
+            if os.clock() - t0 > limit then
+                res.why = "waktu habis"
+                break
+            end
+            task.wait()
+            local w, st = Refs.World, playerState()
+            if not w or not st or st.dead then
+                releaseInput()
+                task.wait(0.5)
+                continue
+            end
+            if not st.grounded then
+                releaseInput()
+                continue
+            end
+            releaseInput()
+            local a, b = spliceInv()
+            if a <= 0 or b <= 0 then
+                res.why = "seed habis"
+                break
+            end
+            if spliceWorkInReach(st) > 0 then
+                status(("tanam %d, splice %d"):format(Splice.Planted - p0, Splice.Made - m0))
+                continue
+            end
+            local R = farmReach() - 0.35
+            local sx, sy = startNode(st)
+            local targets = spliceScan(floor(st.x), floor(st.y - 0.475), 8, reachFilter(sy * w.w + sx, R, false))
+            if #targets == 0 then
+                res.why = "tidak ada tempat tanam lagi"
+                break
+            end
+            status("jalan ke baris " .. targets[1].y)
+            travelGroup(sx, sy, targets, R, false, Splice.Skip, SpliceFail)
+        end
+    end)
+    FC = oldFC
+    Splice.Roaming = false
+    autoEnd()
+    releaseInput()
+    Splice.A, Splice.B = oldA, oldB
+    res.planted = Splice.Planted - p0
+    res.made = Splice.Made - m0
+    if not ok then res.why = "error: " .. tostring(err) end
+    return res
+end
+
 Auto.walkTo = walkTo
 Auto.startSpliceRoam = startSpliceRoam
 Auto.stopSpliceRoam = stopSpliceRoam
@@ -10963,7 +11121,10 @@ addNumber(Box.ClearSet, {
 })
 
 -- v2.9: Auto Leveling = hop world acak -> clear setengah kedalaman -> hop lagi
-Box.ClearLv = box(ClearTab, "Auto Leveling", true)
+-- v2.9.9: menu sendiri (tab Leveling). Box.ClearLv diganti-ganti ke kotak yang sedang diisi.
+Box.LvTab = makeTab("Leveling", "trending-up", "farm")
+Box.LvMain = box(Box.LvTab, "Utama", true)
+Box.ClearLv = Box.LvMain
 safe(function()
     UI.LvStatus = Box.ClearLv:Paragraph({ Title = "Status Leveling", Desc = Clear.Lv.Status })
 end)
@@ -11008,6 +11169,14 @@ addNumber(Box.ClearLv, {
     Min = 2, Max = 125, Step = 1, Default = Clear.Lv.Target,
     Callback = function(v) Clear.Lv.Target = math.floor(v) end,
 })
+Box.LvWorld = box(Box.LvTab, "World acak & clear", false)
+Box.ClearLv = Box.LvWorld
+addNumber(Box.ClearLv, {
+    Title = "Batas gali (% kedalaman world)",
+    Desc = "Sama dengan Batas gali di tab Clear World. 50 = setengah world (tidak sampai lapisan lava)",
+    Min = 10, Max = 100, Step = 5, Default = Clear.LimitPct,
+    Callback = function(v) Clear.LimitPct = math.floor(v) end,
+})
 addNumber(Box.ClearLv, {
     Title = "Nama world: huruf minimal",
     Min = 5, Max = 15, Step = 1, Default = Clear.Lv.MinLen,
@@ -11018,6 +11187,8 @@ addNumber(Box.ClearLv, {
     Min = 5, Max = 20, Step = 1, Default = Clear.Lv.MaxLen,
     Callback = function(v) Clear.Lv.MaxLen = math.floor(v) end,
 })
+Box.LvSmart = box(Box.LvTab, "Pintar (kecepatan)", false)
+Box.ClearLv = Box.LvSmart
 addNumber(Box.ClearLv, {
     Title = "Lewati block lebih dari N pukulan",
     Desc = "XP = 1 per block pecah, jenis apa pun. Block keras (Rock 10 pukulan) rugi. 3 = Dirt & Cave Background saja. 0 = pecah semua",
@@ -11036,6 +11207,7 @@ addNumber(Box.ClearLv, {
     Min = 0, Max = 95, Step = 5, Default = Clear.Lv.SlowPct,
     Callback = function(v) Clear.Lv.SlowPct = math.floor(v) end,
 })
+Box.ClearLv = Box.LvWorld
 addNumber(Box.ClearLv, {
     Title = "Maks menit per world",
     Desc = "Lewat dari ini langsung pindah world",
@@ -11069,6 +11241,70 @@ safe(function()
         Callback = function(on) Clear.Lv.AvoidPlayers = on end,
     })
 end)
+-- v2.9.9: splice seed (di bawah level 10 seed tidak bisa di-drop)
+Box.LvSplice = box(Box.LvTab, "Splice seed (di bawah level 10)", false)
+Box.ClearLv = Box.LvSplice
+safe(function()
+    Box.ClearLv:Paragraph({
+        Title = "Cara kerja",
+        Desc = "Kalau Dirt Seed DAN Cave Background Seed sudah sebanyak 'Minimal tiap seed': pergi ke world splice, "
+            .. "panen pohon hasil splice yang sudah siap, lalu tanam Dirt Seed + splice Cave Background Seed sampai seed / "
+            .. "tempat habis. Pohon yang belum siap ditinggal, dipanen di kunjungan berikutnya. "
+            .. "World splice harus milik sendiri & sudah ada baris block untuk tempat tanam",
+    })
+end)
+safe(function()
+    Box.ClearLv:Toggle({
+        Title = "Splice seed",
+        Desc = "Mati = seed dibiarkan menumpuk",
+        Value = Clear.Lv.SpliceOn,
+        Callback = function(on) Clear.Lv.SpliceOn = on end,
+    })
+end)
+safe(function()
+    Box.ClearLv:Input({
+        Title = "World splice",
+        Desc = "WORLD atau WORLD:ID (masuk lewat pintu ID)",
+        Value = Clear.Lv.SpliceWorld,
+        Placeholder = "KEBUNKU:1",
+        Callback = function(t) Clear.Lv.SpliceWorld = tostring(t or "") end,
+    })
+end)
+addNumber(Box.ClearLv, {
+    Title = "Minimal tiap seed",
+    Desc = "Pergi splice kalau KEDUA seed sudah sebanyak ini (maks 200 per item)",
+    Min = 10, Max = 200, Step = 10, Default = Clear.Lv.SpliceMin,
+    Callback = function(v) Clear.Lv.SpliceMin = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Splice hanya di bawah level",
+    Desc = "Mulai level ini seed bisa di-drop, splice berhenti",
+    Min = 2, Max = 50, Step = 1, Default = Clear.Lv.SpliceMaxLv,
+    Callback = function(v) Clear.Lv.SpliceMaxLv = math.floor(v) end,
+})
+safe(function()
+    Box.ClearLv:Toggle({
+        Title = "Panen pohon hasil splice",
+        Desc = "Pohon hasil splice yang sudah siap dipanen dulu tiap kunjungan (tambah XP). Hasil panen dibiarkan di tas",
+        Value = Clear.Lv.SpliceHarvest,
+        Callback = function(on) Clear.Lv.SpliceHarvest = on end,
+    })
+end)
+safe(function()
+    Box.ClearLv:Button({
+        Title = "Splice di pindah world berikutnya",
+        Desc = "Untuk tes: kunjungan splice berikutnya tidak menunggu seed cukup (Auto Leveling harus jalan)",
+        Callback = function()
+            Clear.Lv.SpliceForce = true
+            Clear.Lv.SpliceWaitUntil = 0
+            local why = Clear.Lv.spliceBlock and Clear.Lv.spliceBlock()
+            notify("Splice", why and ("Belum bisa: " .. why) or "Splice di pindah world berikutnya", 4)
+        end,
+    })
+end)
+
+Box.LvCheck = box(Box.LvTab, "Cek level & laporan XP", false)
+Box.ClearLv = Box.LvCheck
 safe(function()
     Box.ClearLv:Button({
         Title = "Cek level",
@@ -19704,6 +19940,40 @@ do (function()
 
     local function upper(s) return string.upper(tostring(s or "")) end
 
+    -- ---------- v2.9.9: splice seed (di bawah level 10 seed tidak bisa di-drop) ----------
+    local SPLICE_A_BLOCK, SPLICE_B_BLOCK = 2, 14 -- Dirt, Cave Background (seed = Dirt Seed + Cave Background Seed)
+    local function spliceSeeds()
+        local f = Auto.seedOfBlock
+        if type(f) ~= "function" then return nil, nil end
+        return f(SPLICE_A_BLOCK), f(SPLICE_B_BLOCK)
+    end
+    Lv.spliceSeeds = spliceSeeds
+    local function spliceTarget()
+        local raw = tostring(Lv.SpliceWorld or ""):gsub("%s", "")
+        local name, door = string.match(raw, "^([^:|]*)[:|](.+)$")
+        if not name then name = raw end
+        name = string.upper(name):gsub("[^A-Z0-9]", "")
+        if door == "" then door = nil end
+        return name, door
+    end
+    -- Waktunya splice? Hasil: alasan tidak (teks) / nil kalau ya
+    local function spliceBlock()
+        if not Lv.SpliceOn then return "mati" end
+        if spliceTarget() == "" then return "world splice belum diisi" end
+        local lv = okNum(Lv.Level)
+        if not lv then return "level belum terbaca" end
+        if lv >= (tonumber(Lv.SpliceMaxLv) or 10) then return ("level %d: tidak splice lagi"):format(lv) end
+        local A, B = spliceSeeds()
+        if not A or not B then return "seed Dirt / Cave Background tidak ada di data item" end
+        if Lv.SpliceForce then return nil end
+        local wait = (tonumber(Lv.SpliceWaitUntil) or 0) - os.time()
+        if wait > 0 then return ("tunggu %d mnt (%s)"):format(math.ceil(wait / 60), tostring(Lv.SpliceLast)) end
+        local need = tonumber(Lv.SpliceMin) or 150
+        if invCount(A) >= need and invCount(B) >= need then return nil end
+        return "seed belum cukup"
+    end
+    Lv.spliceBlock = spliceBlock
+
     -- v2.9.5: nama pemain lain di world ini (nil = tidak ada / fitur mati)
     local function otherPlayers()
         if not Lv.AvoidPlayers or type(Guard.playersHere) ~= "function" then return nil end
@@ -19723,10 +19993,12 @@ do (function()
     local canFile = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
     local LVFILE = "Fian/leveling_" .. tostring(LocalPlayer.UserId) .. ".json"
 
-    local function writeState(world)
+    local function writeState(world, phase)
         if not canFile then return false end
         local data = {
             on = true, at = os.time(), world = world,
+            phase = phase, doorTried = Lv.DoorTried == true, -- v2.9.9: "splice" = sedang ke world splice
+            spliceVisits = Lv.SpliceVisits, spliceLast = Lv.SpliceLast, spliceWait = Lv.SpliceWaitUntil,
             worlds = Lv.Worlds, cleared = Lv.Cleared, level0 = Lv.Level0,
             known = okNum(Lv.Known), knownSrc = Lv.KnownSrc,
             upCount = Lv.UpCount, slowHops = Lv.SlowHops, -- v2.9.3
@@ -19737,6 +20009,8 @@ do (function()
                 MaxWorlds = Lv.MaxWorlds, HopWait = Lv.HopWait, ClearHere = Lv.ClearHere, LimitPct = Clear.LimitPct,
                 MaxHits = Lv.MaxHits, MinRate = Lv.MinRate, SlowPct = Lv.SlowPct,
                 AvoidPlayers = Lv.AvoidPlayers,
+                SpliceOn = Lv.SpliceOn, SpliceWorld = Lv.SpliceWorld, SpliceMin = Lv.SpliceMin,
+                SpliceMaxLv = Lv.SpliceMaxLv, SpliceHarvest = Lv.SpliceHarvest, SpliceTree = Lv.SpliceTree,
             },
         }
         return (pcall(function()
@@ -19814,6 +20088,36 @@ do (function()
         return true, ("%d tile, s/d baris %d"):format(allowed, mr)
     end
 
+    -- v2.9.9: kerja di world splice (karakter sudah di dalam). Hasil: fase berikutnya
+    local function spliceWork()
+        local A, B = spliceSeeds()
+        local tree = tonumber(Lv.SpliceTree)
+        if not tree and Splice.result then
+            local okR, r = pcall(Splice.result, A, B)
+            if okR then tree = tonumber(r) end
+        end
+        Splice.LastMade = nil
+        set("Splice: mulai di " .. upper(Guard.worldName()))
+        local res = Auto.lvSpliceVisit({
+            A = A, B = B, tree = tree, harvest = Lv.SpliceHarvest,
+            live = function() return Lv.On and alive() and waitReason() == nil end,
+            status = function(t) set("Splice: " .. tostring(t)) end,
+        })
+        if Splice.LastMade then Lv.SpliceTree = Splice.LastMade end
+        Lv.SpliceVisits = (Lv.SpliceVisits or 0) + 1
+        Lv.DoorTried = false
+        Lv.SpliceLast = ("panen %d, tanam %d, splice %d: %s"):format(res.harvested, res.planted, res.made, res.why)
+        local need = tonumber(Lv.SpliceMin) or 150
+        if invCount(A) >= need and invCount(B) >= need then
+            -- masih penuh (tempat tanam habis / gagal): jangan bolak-balik, coba lagi 10 menit lagi
+            Lv.SpliceWaitUntil = os.time() + 600
+        end
+        set("Splice selesai: " .. Lv.SpliceLast)
+        Hook.send("pabrik", "Auto Leveling splice: " .. Lv.SpliceLast)
+        task.wait(1)
+        return "hop"
+    end
+
     local function stopLv(reason)
         if not Lv.On then return end
         Lv.On = false
@@ -19860,6 +20164,9 @@ do (function()
                 continue
             end
 
+            if phase == "hop" and spliceBlock() == nil then
+                phase = "splicego" -- v2.9.9: kedua seed sudah cukup: ke world splice dulu
+            end
             if phase == "hop" then
                 local hw = tonumber(Lv.HopWait) or 0
                 if hw > 0 then
@@ -19875,6 +20182,50 @@ do (function()
                     set("8x gagal masuk world acak, coba lagi dalam 30 dtk")
                     task.wait(30)
                 end
+            elseif phase == "splicego" then
+                -- v2.9.9: masuk world splice (lewat pintu ID kalau diisi)
+                local name, door = spliceTarget()
+                Lv.SpliceForce = false
+                set(("Splice: pergi ke %s%s"):format(name, door and (" pintu " .. door) or ""))
+                Pabrik.Traveling = true
+                Pabrik.TravelAt = os.clock()
+                Lv.World = name
+                writeState(name, "splice") -- teleport: script baru lanjut kerja splice dari catatan ini
+                local okC, ok, err = pcall(goWorld, name, door)
+                Pabrik.Traveling = false
+                if not Lv.On or not alive() then break end
+                local arrived = false
+                if okC and ok then
+                    local t0 = os.clock()
+                    while Lv.On and alive() and os.clock() - t0 < 12 do
+                        if playerState() and Refs.World and upper(Guard.worldName()) == name then
+                            arrived = true
+                            break
+                        end
+                        task.wait(0.3)
+                    end
+                end
+                if arrived then
+                    clearState()
+                    task.wait(1)
+                    phase = "splicework"
+                else
+                    Lv.SpliceWaitUntil = os.time() + 600
+                    Lv.SpliceLast = ("gagal masuk %s: %s"):format(name, tostring(okC and (err or "karakter tidak muncul") or ok))
+                    set("Splice: " .. Lv.SpliceLast .. " (coba lagi 10 menit)")
+                    phase = "hop"
+                end
+            elseif phase == "splicearrive" then
+                -- datang lewat teleport: pintu tujuan tidak terpakai (muncul di pintu utama) -> masuk ulang lewat pintu, 1x
+                local _, door = spliceTarget()
+                if door and not Lv.DoorTried then
+                    Lv.DoorTried = true
+                    phase = "splicego"
+                else
+                    phase = "splicework"
+                end
+            elseif phase == "splicework" then
+                phase = spliceWork()
             elseif phase == "check" then
                 if not playerState() then
                     phase = "hop" -- di layar pilih world
@@ -20027,6 +20378,7 @@ do (function()
         Lv.Worlds, Lv.Cleared = 0, 0
         Lv.SlowHops = 0
         Lv.PlayerHops = 0
+        Lv.SpliceVisits, Lv.SpliceWaitUntil, Lv.DoorTried = 0, 0, false
         Lv.Level0 = lv
         Lv.World = ""
         set(lv and ("Mulai (level " .. lv .. ")") or "Mulai (level belum terbaca)")
@@ -20063,6 +20415,16 @@ do (function()
         Lv.SlowHops = tonumber(saved.slowHops) or 0
         Lv.PlayerHops = tonumber(saved.playerHops) or 0 -- v2.9.5
         if type(c.AvoidPlayers) == "boolean" then Lv.AvoidPlayers = c.AvoidPlayers end
+        -- v2.9.9: splice
+        if type(c.SpliceOn) == "boolean" then Lv.SpliceOn = c.SpliceOn end
+        if type(c.SpliceHarvest) == "boolean" then Lv.SpliceHarvest = c.SpliceHarvest end
+        if type(c.SpliceWorld) == "string" then Lv.SpliceWorld = c.SpliceWorld end
+        num("SpliceMin", 10, 200) num("SpliceMaxLv", 2, 125)
+        if tonumber(c.SpliceTree) then Lv.SpliceTree = tonumber(c.SpliceTree) end
+        Lv.SpliceVisits = tonumber(saved.spliceVisits) or 0
+        Lv.SpliceLast = tostring(saved.spliceLast or "-")
+        Lv.SpliceWaitUntil = tonumber(saved.spliceWait) or 0
+        Lv.DoorTried = saved.doorTried == true
         if type(c.ClearHere) == "boolean" then Lv.ClearHere = c.ClearHere end
         local lp = tonumber(c.LimitPct)
         if lp then Clear.LimitPct = math.clamp(math.floor(lp), 10, 100) end
@@ -20096,7 +20458,7 @@ do (function()
                     task.wait(2)
                     pcall(Guard.afterEnter)
                     if upper(Guard.worldName()) == upper(Lv.World) then
-                        phase = "check"
+                        phase = (saved.phase == "splice") and "splicearrive" or "check" -- v2.9.9
                     else
                         set(("Masuk ke %s (bukan %s), pindah lagi"):format(upper(Guard.worldName()), Lv.World))
                     end
@@ -20133,6 +20495,15 @@ do (function()
                     .. "\nWorld  : " .. (Lv.World ~= "" and Lv.World or "-")
                     .. "  | dimasuki " .. Lv.Worlds .. " | selesai " .. Lv.Cleared .. " | pindah: lambat " .. (Lv.SlowHops or 0) .. ", ada pemain " .. (Lv.PlayerHops or 0)
                     .. "\nAksi   : " .. tostring(Lv.Status)
+                do -- v2.9.9: splice
+                    local A, B = spliceSeeds()
+                    local why = spliceBlock()
+                    txt = txt .. ("\nSplice : %s | %s %d, %s %d / %d | kunjungan %d"):format(
+                        why == nil and "SIAP" or why,
+                        A and itemName(A) or "-", A and invCount(A) or 0, B and itemName(B) or "-", B and invCount(B) or 0,
+                        tonumber(Lv.SpliceMin) or 150, Lv.SpliceVisits or 0)
+                    if (Lv.SpliceLast or "-") ~= "-" then txt = txt .. "\nSplice terakhir: " .. tostring(Lv.SpliceLast) end
+                end
                 if Clear.Meter.summary then -- v2.9.2
                     local okS, m = pcall(Clear.Meter.summary)
                     if okS and m then txt = txt .. "\n" .. m end
