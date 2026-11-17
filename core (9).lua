@@ -3,7 +3,7 @@ local SKYP = ...
 -- Dari loader skyp-guard: SKYP dikirim loader (versi, cek key, onStop) seperti biasa.
 if type(SKYP) ~= "table" then
     SKYP = {
-        version = "v2.9.2",
+        version = "v2.9.4",
         shared = {},                          -- SkyUI pakai versi yang ditanam di bawah
         onStop = {},
         isAlive = function() return true end, -- tanpa loader: tidak ada key yang bisa dicabut
@@ -64,7 +64,7 @@ end
 -- [skyp-guard] Lisensi sekarang dipegang loader (/auth + /hb). Pengecekan lama dimatikan (Off = true).
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
     Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.2" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.9.4" end
 do
     local Lic = Session.Lic
     local HS = game:GetService("HttpService")
@@ -1820,6 +1820,8 @@ local State = {
     MutePunch = true,
     Visual = true,                -- animasi tangan saat break / place / tanam / panen (tampilan saja)
     LiteMode = false,
+    PerfMode = "Mati",            -- mode ringan: "Mati" / "Smooth" / "Blank" (lihat MODE RINGAN)
+    PerfFps = 30,                 -- batas FPS saat mode ringan nyala (kalau executor punya setfpscap)
     AutoCollect = true,           -- ambil drop di tile yang dipilih
     CollectAround = false,        -- ambil drop di sekitar karakter (radius) kapan saja
     CollectRadius = 3,            -- jari-jari collect (tile), dipakai mode Remote
@@ -1887,6 +1889,11 @@ local Clear = {
         MaxWorlds = 0,        -- berhenti setelah sekian world (0 = tanpa batas)
         HopWait = 3,          -- jeda sebelum pindah world (detik)
         ClearHere = false,    -- world pertama = world sekarang (mati = langsung hop ke world acak)
+        -- v2.9.3: XP = 1 per block pecah (jenis apa pun), jadi block keras rugi & world sepi block rugi
+        MaxHits = 3,          -- saat Auto Leveling: block yang butuh lebih dari sekian pukulan dilewati (0 = semua dipecah)
+        MinRate = 40,         -- pindah world kalau laju < sekian pecah/menit ...
+        SlowPct = 50,         -- ... atau < sekian % dari laju terbaik di world ini
+        SlowHops = 0,         -- pindah world karena laju turun (sesi ini)
         Worlds = 0,           -- world yang sudah dimasuki sesi ini
         Cleared = 0,          -- world yang selesai di-clear
         Level = nil,          -- level terakhir yang terbaca
@@ -2274,12 +2281,13 @@ end)() end
 
 Config.add("Farm", State, {
     "Mode", "PlaceMs", "BreakMs", "AfterBreakMs", "HitsOverride", "SelectedId", "Offsets",
-    "CalibX", "CalibY", "AntiAfk", "MutePunch", "Visual", "LiteMode", "AutoCollect", "MultiTarget", "Fast",
+    "CalibX", "CalibY", "AntiAfk", "MutePunch", "Visual", "LiteMode", "PerfMode", "PerfFps", "AutoCollect", "MultiTarget", "Fast",
     "CollectAround", "CollectRadius", "CollectMode", "RemoteReach", "RemoteChase", "CollectAuto",
     "SeedDrop", "SeedDropAt", "SeedKeep", "AutoRefill", "RefillRadius", "AutoReturn",
 })
 Config.add("Clear", Clear, { "UseBlock", "ScaffoldId", "Collect", "Sweep", "LimitOn", "LimitPct" })
-Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere", "Known" })
+Config.add("Leveling", Clear.Lv, { "Target", "MinLen", "MaxLen", "MaxMin", "MaxWorlds", "HopWait", "ClearHere", "Known",
+    "MaxHits", "MinRate", "SlowPct" })
 Config.add("Farmer", Farmer, {
     "Harvest", "Plant", "Collect", "UseBlock", "ScaffoldId", "HarvestMs", "PlantMs", "SeedId",
 })
@@ -2951,7 +2959,7 @@ end
 -- AKSI DASAR: place & pukul
 ---------------------------------------------------------------------
 local function sendSetTile(layer, x, y, id)
-    if id ~= 0 and State.Visual and Anim.place then Anim.place(x, y, id) end
+    if id ~= 0 and State.Visual and State.PerfMode == "Mati" and Anim.place then Anim.place(x, y, id) end
     if Refs.SetTile then
         local ok, err = pcall(Refs.SetTile, layer, x, y, id, false, false)
         if ok then return true end
@@ -3061,7 +3069,7 @@ local function tryBreak(x, y, includeBg)
             State.LastAction = "Error pukul: " .. tostring(err)
             return nil
         end
-        if State.Visual then Anim.swing(x, y, "punch") end
+        if State.Visual and State.PerfMode == "Mati" then Anim.swing(x, y, "punch") end
         local broke = tileAt(layer, x, y) ~= id
         local mp = Clear.Meter.onPunch -- v2.9.2: pengukur XP
         if mp then pcall(mp, id, broke) end
@@ -3084,7 +3092,7 @@ local function tryBreak(x, y, includeBg)
     end
     hc.n += 1
     sendHitFx(x, y)
-    if State.Visual then Anim.swing(x, y, "punch") end
+    if State.Visual and State.PerfMode == "Mati" then Anim.swing(x, y, "punch") end
     local need = hitsNeeded(id)
     local mp = Clear.Meter.onPunch -- v2.9.2: pengukur XP
     if mp then pcall(mp, id, hc.n >= need) end
@@ -3850,8 +3858,11 @@ local function liteOverride(tbl, key, repl)
     end
 end
 
-local function setLite(on)
-    State.LiteMode = on
+-- fromPerf = dipanggil Mode ringan: pilihan "Mode Lite" pembeli tidak diubah, particle & suara
+-- tetap mati selama Smooth / Blank nyala.
+local function setLite(on, fromPerf)
+    if not fromPerf then State.LiteMode = on end
+    on = State.LiteMode or (UI.Perf ~= nil and not UI.Perf.Dead and State.PerfMode ~= "Mati")
     if on then
         if #LiteSaved == 0 then
             if ParticlesOk then liteOverride(ParticlesModule, "spawn", function() return DummyParticle end) end
@@ -5672,6 +5683,9 @@ local function clearCanBreak(id)
     if not it then return false end
     if it.lock or it.area or it.guildLock or it.vend or it.display then return false end
     local h = (it.kind == "seed") and 20 or it.hits
+    -- v2.9.3: Auto Leveling lewati block keras (XP sama, pukulan lebih banyak)
+    local mh = Clear.Lv.On and tonumber(Clear.Lv.MaxHits) or 0
+    if mh > 0 and type(h) == "number" and h > mh then return false end
     if type(h) == "number" and h > 0 then return true end
     local w = Refs.World
     return (it.staffHits and w and w.areas and w.areas.staff) and true or false
@@ -9849,6 +9863,292 @@ local function newScreenGui(name)
     return sg
 end
 
+---------------------------------------------------------------------
+-- MODE RINGAN (Smooth / Blank): kurangi beban gambar di HP (v2.9.4: dipasang lagi dari versi lama)
+---------------------------------------------------------------------
+--   Mati   : tidak ada yang diubah.
+--   Smooth : particle, suara & animasi tangan mati, background (langit / awan / bukit) disembunyikan,
+--            FPS dibatasi (State.PerfFps).
+--   Blank  : semua yang di Smooth + layar world disembunyikan & render 3D dimatikan. Tinggal kotak
+--            status kecil dengan tombol "Tampilkan layar". Untuk AFK lama.
+-- Tampilan saja: farm membaca data game (Refs.State / World), bukan layar, jadi tetap jalan.
+-- Semua yang disembunyikan dicatat dan dikembalikan saat mode dimatikan / script ditutup.
+State.PerfMode = (State.PerfMode == "Smooth" or State.PerfMode == "Blank") and State.PerfMode or "Mati"
+State.PerfFps = math.clamp(math.floor(tonumber(State.PerfFps) or 30), 10, 60)
+do (function() -- fungsi sendiri: variabel di dalam tidak ikut batas 200 local
+    local Perf = {
+        Hidden = {},   -- [GuiObject] = Visible yang diinginkan game (dipasang lagi saat dikembalikan)
+        Kind = {},     -- [GuiObject] = "bg" (background) / "world" (layar world)
+        Conns = {},    -- [GuiObject] = koneksi penjaga (game menampilkan lagi -> disembunyikan lagi)
+        Layer = nil,   -- cadangan: ScreenGui game yang dimatikan kalau wadah "World" tidak ketemu
+        BgCount = 0,
+        Dead = false,
+    }
+    UI.Perf = Perf
+
+    -- nama wadah background. Nama di game bisa berubah tiap update: kalau tidak ada yang cocok,
+    -- background dibiarkan (BgCount = 0) dan sisanya tetap jalan.
+    local BG_PART = { "sky", "cloud", "backdrop", "background", "parallax", "weather", "hill", "mountain" }
+    local BG_EXACT = { bg = true, sun = true, moon = true, stars = true, star = true }
+    local KEEP = { World = true, Camera = true, Tiles = true, PlayerView = true }
+
+    local function isBgName(name)
+        local n = string.lower(name)
+        if BG_EXACT[n] then return true end
+        for _, w in ipairs(BG_PART) do
+            if string.find(n, w, 1, true) then return true end
+        end
+        return false
+    end
+
+    -- hanya 3 tingkat teratas GameGui (GameGui > World > Camera > anak-anaknya). Isi Tiles / PlayerView
+    -- (ribuan gambar block) tidak ditelusuri, jadi scan ini ringan.
+    local function scanBg(gg)
+        local found = {}
+        local function walk(node, depth)
+            for _, c in ipairs(node:GetChildren()) do
+                if c:IsA("GuiObject") then
+                    local nm = c.Name
+                    if not KEEP[nm] and isBgName(nm) then
+                        found[#found + 1] = c
+                    elseif depth < 3 and nm ~= "Tiles" and nm ~= "PlayerView" then
+                        walk(c, depth + 1)
+                    end
+                end
+            end
+        end
+        walk(gg, 1)
+        return found
+    end
+
+    local function hide(o, kind)
+        if Perf.Hidden[o] ~= nil then
+            if o.Visible then o.Visible = false end
+            return
+        end
+        Perf.Hidden[o] = o.Visible
+        Perf.Kind[o] = kind
+        o.Visible = false
+        Perf.Conns[o] = o:GetPropertyChangedSignal("Visible"):Connect(function()
+            if Perf.Hidden[o] ~= nil and o.Visible then
+                Perf.Hidden[o] = true -- game ingin menampilkannya: diingat, lalu disembunyikan lagi
+                o.Visible = false
+            end
+        end)
+    end
+
+    local function release(o)
+        local was = Perf.Hidden[o]
+        Perf.Hidden[o], Perf.Kind[o] = nil, nil
+        local c = Perf.Conns[o]
+        Perf.Conns[o] = nil
+        if c then pcall(function() c:Disconnect() end) end
+        return was
+    end
+
+    local function restore(kind)
+        local list = {}
+        for o, k in pairs(Perf.Kind) do
+            if kind == nil or k == kind then list[#list + 1] = o end
+        end
+        for _, o in ipairs(list) do
+            local was = release(o) -- penjaga dilepas dulu supaya tidak disembunyikan lagi
+            pcall(function()
+                if o.Parent and was ~= nil then o.Visible = was end
+            end)
+        end
+    end
+
+    -- wadah yang sudah dihapus game (pindah world) dibuang dari catatan
+    local function purge()
+        local dead = {}
+        for o in pairs(Perf.Hidden) do
+            local ok, par = pcall(function() return o.Parent end)
+            if not ok or par == nil then dead[#dead + 1] = o end
+        end
+        for _, o in ipairs(dead) do release(o) end
+    end
+
+    local function applyFps(on)
+        local setcap = setfpscap or set_fps_cap
+        Perf.FpsOk = type(setcap) == "function"
+        if not Perf.FpsOk then return end
+        if on then
+            if Perf.FpsWas == nil then
+                local getcap = getfpscap or get_fps_cap
+                local okG, v = false, nil
+                if type(getcap) == "function" then okG, v = pcall(getcap) end
+                Perf.FpsWas = (okG and type(v) == "number" and v >= 0) and v or 60
+            end
+            if Perf.FpsNow ~= State.PerfFps then
+                if pcall(setcap, State.PerfFps) then Perf.FpsNow = State.PerfFps end
+            end
+        elseif Perf.FpsWas ~= nil then
+            pcall(setcap, Perf.FpsWas)
+            Perf.FpsWas, Perf.FpsNow = nil, nil
+        end
+    end
+
+    local function apply3d(off)
+        if off == (Perf.R3dOff == true) then return end
+        if pcall(function() RunService:Set3dRenderingEnabled(not off) end) then Perf.R3dOff = off end
+    end
+
+    -- kotak status mode Blank (di bawah menu SkyP, jadi menu tetap bisa dipakai)
+    local gui = newScreenGui("SkyPBlank")
+    gui.DisplayOrder = 1
+    Perf.Gui = gui
+    local card = Instance.new("Frame")
+    card.AnchorPoint = Vector2.new(0.5, 0.5)
+    card.Position = UDim2.new(0.5, 0, 0.45, 0)
+    card.Size = UDim2.fromOffset(330, 132)
+    card.BackgroundColor3 = Color3.fromRGB(17, 19, 26)
+    card.BorderSizePixel = 0
+    card.Parent = gui
+    local corner = Instance.new("UICorner")
+    corner.CornerRadius = UDim.new(0, 10)
+    corner.Parent = card
+    local head = Instance.new("TextLabel")
+    head.BackgroundTransparency = 1
+    head.Position = UDim2.fromOffset(14, 10)
+    head.Size = UDim2.new(1, -28, 0, 18)
+    head.Font = Enum.Font.GothamBold
+    head.TextSize = 14
+    head.TextColor3 = Color3.fromRGB(132, 196, 255)
+    head.TextXAlignment = Enum.TextXAlignment.Left
+    head.Text = "SkyP - Mode Blank"
+    head.Parent = card
+    local body = Instance.new("TextLabel")
+    body.BackgroundTransparency = 1
+    body.Position = UDim2.fromOffset(14, 32)
+    body.Size = UDim2.new(1, -28, 0, 56)
+    body.Font = Enum.Font.Gotham
+    body.TextSize = 12
+    body.TextColor3 = Color3.fromRGB(236, 240, 247)
+    body.TextXAlignment = Enum.TextXAlignment.Left
+    body.TextYAlignment = Enum.TextYAlignment.Top
+    body.TextWrapped = true
+    body.Text = ""
+    body.Parent = card
+    local btn = Instance.new("TextButton")
+    btn.Position = UDim2.new(0, 14, 1, -38)
+    btn.Size = UDim2.new(1, -28, 0, 28)
+    btn.BackgroundColor3 = Color3.fromRGB(62, 150, 255)
+    btn.BorderSizePixel = 0
+    btn.AutoButtonColor = true
+    btn.Font = Enum.Font.GothamMedium
+    btn.TextSize = 13
+    btn.TextColor3 = Color3.new(1, 1, 1)
+    btn.Text = I18N.T("Tampilkan layar")
+    btn.Parent = card
+    local bcorner = Instance.new("UICorner")
+    bcorner.CornerRadius = UDim.new(0, 8)
+    bcorner.Parent = btn
+
+    local function bodyText()
+        -- v2.9.4: Auto Leveling / Clear World ikut ditampilkan (bukan hanya Farm)
+        local lv = Clear.Lv
+        if lv and lv.On then
+            return ("Auto Leveling | Level %s / target %s | world %d\nAksi: %s\nLayar world disembunyikan supaya HP ringan"):format(
+                tostring(lv.Level or "-"), tostring(lv.Target), lv.Worlds or 0, tostring(lv.Status or "-"))
+        elseif Clear.Running then
+            return ("Clear World | dipecah %d | sisa %s\nAksi: %s\nLayar world disembunyikan supaya HP ringan"):format(
+                Clear.Broken or 0, Clear.Remaining >= 0 and tostring(Clear.Remaining) or "-", tostring(Clear.Status or "-"))
+        end
+        return I18N.T(("Farm %s | Place %d | Break %d | Collect %d\nAksi: %s\nLayar world disembunyikan supaya HP ringan"):format(
+            State.Running and "JALAN" or "BERHENTI", State.Placed or 0, State.Broken or 0, State.Collected or 0,
+            tostring(State.LastAction or "-")))
+    end
+
+    -- bagian layar: dipanggil saat mode diganti dan diulang berkala (wadah game dibuat ulang tiap pindah world)
+    function Perf.sync(forceOff)
+        local mode = (forceOff or Perf.Dead) and "Mati" or State.PerfMode
+        local on, blank = mode ~= "Mati", mode == "Blank"
+        purge()
+        local gg = PlayerGui:FindFirstChild("GameGui")
+        if on then
+            if gg then
+                for _, o in ipairs(scanBg(gg)) do hide(o, "bg") end
+            end
+        else
+            restore("bg")
+        end
+        if blank then
+            local world = gg and gg:FindFirstChild("World")
+            if world and world:IsA("GuiObject") then
+                hide(world, "world")
+            elseif gg and gg:IsA("LayerCollector") then
+                Perf.Layer = gg
+                if gg.Enabled then gg.Enabled = false end
+            end
+            body.Text = bodyText()
+        else
+            restore("world")
+            if Perf.Layer then
+                local layer = Perf.Layer
+                Perf.Layer = nil
+                pcall(function() layer.Enabled = true end)
+            end
+        end
+        local n = 0
+        for _, k in pairs(Perf.Kind) do
+            if k == "bg" then n += 1 end
+        end
+        Perf.BgCount = n
+        gui.Enabled = blank
+    end
+
+    function Perf.apply(forceOff)
+        local on = not (forceOff or Perf.Dead) and State.PerfMode ~= "Mati"
+        pcall(setLite, State.LiteMode, true)
+        applyFps(on)
+        apply3d(on and State.PerfMode == "Blank")
+        Perf.sync(forceOff)
+    end
+
+    function Perf.set(mode)
+        if mode ~= "Smooth" and mode ~= "Blank" then mode = "Mati" end
+        if State.PerfMode == mode then return end
+        State.PerfMode = mode
+        local ok, err = pcall(Perf.apply)
+        if not ok then
+            warn("[SkyP] mode ringan: " .. tostring(err))
+            notify("Mode ringan", "Gagal: " .. tostring(err), 5)
+            return
+        end
+        if mode == "Mati" then
+            notify("Mode ringan", "Mati: tampilan dikembalikan", 3)
+        else
+            notify("Mode ringan", mode .. ": background disembunyikan " .. Perf.BgCount
+                .. " | batas FPS " .. (Perf.FpsOk and tostring(State.PerfFps) or "tidak didukung executor"), 5)
+        end
+    end
+
+    -- dipanggil Cleanup: semua dikembalikan, pilihan pembeli (State.PerfMode) tidak diubah
+    function Perf.stop()
+        Perf.Dead = true
+        pcall(Perf.apply, true)
+        restore(nil)
+        pcall(function() gui:Destroy() end)
+    end
+
+    table.insert(Connections, btn.MouseButton1Click:Connect(function()
+        Perf.set("Mati")
+        if UI.PerfDropdown then pcall(function() UI.PerfDropdown:Select("Mati") end) end
+    end))
+
+    task.spawn(function()
+        if State.PerfMode ~= "Mati" then pcall(Perf.apply) end -- pilihan tersimpan dipasang saat execute
+        while alive() and not Perf.Dead do
+            task.wait(State.PerfMode == "Blank" and 1 or 2)
+            if alive() and not Perf.Dead and State.PerfMode ~= "Mati" then
+                applyFps(true) -- slider Batas FPS diubah
+                pcall(Perf.sync)
+            end
+        end
+    end)
+end)() end
+
 local GRID_RADIUS = 2
 local CELL = 38
 local GAP = 4
@@ -10573,6 +10873,24 @@ addNumber(Box.ClearLv, {
     Callback = function(v) Clear.Lv.MaxLen = math.floor(v) end,
 })
 addNumber(Box.ClearLv, {
+    Title = "Lewati block lebih dari N pukulan",
+    Desc = "XP = 1 per block pecah, jenis apa pun. Block keras (Rock 10 pukulan) rugi. 3 = Dirt & Cave Background saja. 0 = pecah semua",
+    Min = 0, Max = 30, Step = 1, Default = Clear.Lv.MaxHits,
+    Callback = function(v) Clear.Lv.MaxHits = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Pindah kalau laju di bawah (pecah/menit)",
+    Desc = "Dinilai setelah 90 dtk di world, laju rendah harus bertahan 20 dtk. 0 = mati",
+    Min = 0, Max = 200, Step = 5, Default = Clear.Lv.MinRate,
+    Callback = function(v) Clear.Lv.MinRate = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
+    Title = "Pindah kalau laju di bawah % terbaik",
+    Desc = "Dibanding laju terbaik di world yang sama. 0 = mati",
+    Min = 0, Max = 95, Step = 5, Default = Clear.Lv.SlowPct,
+    Callback = function(v) Clear.Lv.SlowPct = math.floor(v) end,
+})
+addNumber(Box.ClearLv, {
     Title = "Maks menit per world",
     Desc = "Lewat dari ini langsung pindah world",
     Min = 2, Max = 60, Step = 1, Default = Clear.Lv.MaxMin,
@@ -10799,6 +11117,27 @@ local SetTab = makeTab("Pengaturan", "sliders-horizontal", "setel")
 Box.SetChar = box(SetTab, "Karakter", true)
 Box.SetOpt = box(SetTab, "Opsi", true)
 local OptTab = Box.SetOpt
+
+safe(function()
+    UI.PerfDropdown = OptTab:Dropdown({
+        Title = "Mode ringan",
+        Desc = "Smooth = background, particle, suara & animasi mati + FPS dibatasi. "
+            .. "Blank = layar world disembunyikan (paling ringan, untuk AFK). Tampilan saja, farm tetap jalan",
+        Values = { "Mati", "Smooth", "Blank" },
+        Value = State.PerfMode,
+        Callback = function(v)
+            if type(v) == "table" then v = v[1] end
+            UI.Perf.set((v == "Smooth" or v == "Blank") and v or "Mati")
+        end,
+    })
+end)
+
+addNumber(OptTab, {
+    Title = "Batas FPS (mode ringan)",
+    Desc = "Dipakai saat Smooth / Blank nyala. Makin rendah makin ringan, tapi di bawah 20 farm ikut melambat",
+    Min = 10, Max = 60, Step = 5, Default = State.PerfFps,
+    Callback = function(v) State.PerfFps = math.clamp(math.floor(v), 10, 60) end,
+})
 
 safe(function()
     OptTab:Toggle({
@@ -18122,6 +18461,7 @@ local function reconnect(show)
     Anim.fn, Anim.idx = nil, nil
     pcall(Anim.findFast)
     if State.LiteMode then setLite(true) end
+    if UI.Perf and State.PerfMode ~= "Mati" then pcall(UI.Perf.apply) end
     if Misc.InfJump then hookJammer() end
     pcall(function() UI.RefInfo:SetDesc(refsText()) end)
     updateStatus()
@@ -18459,6 +18799,12 @@ do (function()
         sec = math.max(0, math.floor(sec or 0))
         if sec >= 3600 then return ("%dj%02dm"):format(sec // 3600, sec % 3600 // 60) end
         return ("%dm%02dd"):format(sec // 60, sec % 60)
+    end
+
+    -- v2.9.3: block pecah dalam 60 dtk terakhir
+    function M.rate()
+        prune(os.clock())
+        return #M.Times
     end
 
     -- 2-3 baris untuk status Leveling
@@ -19197,10 +19543,12 @@ do (function()
             on = true, at = os.time(), world = world,
             worlds = Lv.Worlds, cleared = Lv.Cleared, level0 = Lv.Level0,
             known = okNum(Lv.Known), knownSrc = Lv.KnownSrc,
+            upCount = Lv.UpCount, slowHops = Lv.SlowHops, -- v2.9.3
             meter = Clear.Meter.export and select(2, pcall(Clear.Meter.export)) or nil, -- v2.9.2
             cfg = {
                 Target = Lv.Target, MinLen = Lv.MinLen, MaxLen = Lv.MaxLen, MaxMin = Lv.MaxMin,
                 MaxWorlds = Lv.MaxWorlds, HopWait = Lv.HopWait, ClearHere = Lv.ClearHere, LimitPct = Clear.LimitPct,
+                MaxHits = Lv.MaxHits, MinRate = Lv.MinRate, SlowPct = Lv.SlowPct,
             },
         }
         return (pcall(function()
@@ -19296,6 +19644,7 @@ do (function()
     local function loop(startPhase)
         local phase = startPhase or (Lv.ClearHere and "check" or "hop")
         local clearAt, lastLvAt, pausedAt, outAt = 0, -99, nil, nil
+        local peak, slowAt = 0, nil -- v2.9.3: laju terbaik di world ini, sejak kapan laju rendah
         while Lv.On and alive() do
             task.wait(0.5)
             -- level target
@@ -19358,6 +19707,7 @@ do (function()
                     continue
                 end
                 clearAt, pausedAt, outAt = os.clock(), nil, nil
+                peak, slowAt = 0, nil
                 phase = "clear"
                 set(("Clear %s (%s)"):format(Lv.World, info))
             elseif phase == "clear" then
@@ -19372,8 +19722,30 @@ do (function()
                         stopClear("Waktu di world habis")
                         phase = "hop"
                     else
-                        set(("Clear %s | sisa %s | %d dtk"):format(Lv.World,
-                            Clear.Remaining >= 0 and tostring(Clear.Remaining) or "-", math.floor(os.clock() - clearAt)))
+                        -- v2.9.3: pindah kalau laju turun. 90 dtk pertama tidak dinilai (masih jalan ke block),
+                        -- laju rendah harus bertahan 20 dtk dulu (bukan cuma sesaat jalan ke baris berikutnya)
+                        local age = os.clock() - clearAt
+                        local rate = Clear.Meter.rate and Clear.Meter.rate() or -1
+                        local slowTxt = ""
+                        if rate >= 0 and age >= 90 then
+                            if rate > peak then peak = rate end
+                            local minR = math.max(tonumber(Lv.MinRate) or 0, peak * (tonumber(Lv.SlowPct) or 0) / 100)
+                            if rate < minR then
+                                slowAt = slowAt or os.clock()
+                                slowTxt = (" | lambat %d dtk"):format(math.floor(os.clock() - slowAt))
+                            else
+                                slowAt = nil
+                            end
+                        end
+                        if slowAt and os.clock() - slowAt >= 20 then
+                            Lv.SlowHops += 1
+                            stopClear(("Laju turun (%d pecah/mnt, terbaik %d)"):format(rate, peak))
+                            phase = "hop"
+                        else
+                            set(("Clear %s | %s pecah/mnt | sisa %s | %d dtk%s"):format(Lv.World,
+                                rate >= 0 and tostring(rate) or "-",
+                                Clear.Remaining >= 0 and tostring(Clear.Remaining) or "-", math.floor(age), slowTxt))
+                        end
                     end
                 else
                     local st = tostring(Clear.Status or "")
@@ -19452,6 +19824,7 @@ do (function()
         end
         Lv.On = true
         Lv.Worlds, Lv.Cleared = 0, 0
+        Lv.SlowHops = 0
         Lv.Level0 = lv
         Lv.World = ""
         set(lv and ("Mulai (level " .. lv .. ")") or "Mulai (level belum terbaca)")
@@ -19483,6 +19856,9 @@ do (function()
         end
         num("Target", 2, 125) num("MinLen", 5, 15) num("MaxLen", 5, 20)
         num("MaxMin", 2, 60) num("MaxWorlds", 0, 500) num("HopWait", 0, 30)
+        num("MaxHits", 0, 30) num("MinRate", 0, 200) num("SlowPct", 0, 95) -- v2.9.3
+        Lv.UpCount = tonumber(saved.upCount) or Lv.UpCount or 0
+        Lv.SlowHops = tonumber(saved.slowHops) or 0
         if type(c.ClearHere) == "boolean" then Lv.ClearHere = c.ClearHere end
         local lp = tonumber(c.LimitPct)
         if lp then Clear.LimitPct = math.clamp(math.floor(lp), 10, 100) end
@@ -19551,7 +19927,7 @@ do (function()
                     .. "\nLevel  : " .. lvTxt .. "  (awal " .. tostring(Lv.Level0 or "-") .. ", target " .. tostring(Lv.Target) .. ")"
                     .. (Lv.Src and ("\nSumber : " .. Lv.Src) or "")
                     .. "\nWorld  : " .. (Lv.World ~= "" and Lv.World or "-")
-                    .. "  | dimasuki " .. Lv.Worlds .. " | selesai " .. Lv.Cleared
+                    .. "  | dimasuki " .. Lv.Worlds .. " | selesai " .. Lv.Cleared .. " | pindah karena lambat " .. (Lv.SlowHops or 0)
                     .. "\nAksi   : " .. tostring(Lv.Status)
                 if Clear.Meter.summary then -- v2.9.2
                     local okS, m = pcall(Clear.Meter.summary)
@@ -20343,7 +20719,7 @@ do (function()
                 w[#w + 1] = "Dirt Farm tidak memberi tanda hidup " .. dur(beat) .. " (kemungkinan macet di tahap '" .. s(rt.Phase) .. "')"
             end
         end
-        if fps > 0 and fps < 20 then
+        if fps > 0 and fps < 20 and State.PerfMode == "Mati" then -- mode ringan sengaja membatasi FPS
             w[#w + 1] = ("FPS rendah (%.0f): aktifkan Mode Lite"):format(fps)
         end
         for _, m in ipairs(modules()) do
@@ -20824,6 +21200,7 @@ Session.Cleanup = function()
     pcall(nameRestore)
     -- kembalikan fungsi game ke asal
     pcall(setLite, false)
+    pcall(function() UI.Perf.stop() end) -- mode ringan: layar, FPS & render dikembalikan
     pcall(unhookJammer)
     if OrigIsDown and MenuModOk and rawget(MenuModule, "isDown") == isDownWrapper then
         MenuModule.isDown = OrigIsDown
