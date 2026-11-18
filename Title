@@ -1,7 +1,12 @@
--- SkyP Title Detector (script terpisah dari SkyP)
--- Menampilkan title / role semua pemain di server ini, dibaca dari modul Roles game
--- (titlesOf, titleName, isModerator, isDeveloper, isUndercover). Hanya MEMBACA, tidak mengirim apa pun ke server.
--- Pemain baru yang punya title / staff -> notifikasi.
+-- SkyP Title Detector v3 (script terpisah dari SkyP)
+-- Mode "Semua title": cari SEMUA title yang ada di data game (tidak perlu ketemu pemainnya), hasil bisa disalin.
+-- Menampilkan pemain di world + title-nya (mis. "Dr. ... of Legend", "(GL)") dan staff (Mod / Dev / undercover).
+-- Sumber data:
+--   1) daftar pemain di world dari game (nama lengkap yang tampil di atas kepala, termasuk title).
+--      Paling mudah: jalankan SkyP dulu (SkyP sudah menemukan data ini), lalu script ini.
+--      Tanpa SkyP: dicari sendiri lewat getgc (tidak semua executor bisa).
+--   2) modul Roles game: title yang dimiliki & status staff.
+-- Hanya MEMBACA, tidak mengirim apa pun ke server.
 -- Catatan: efek nama buatan script (mis. nama rainbow) hanya ada di layar pemakainya, jadi TIDAK bisa dideteksi.
 
 local Players = game:GetService("Players")
@@ -20,12 +25,34 @@ end
 local function strip(s) return (tostring(s or ""):gsub("`.", "")) end
 
 -- ---------- cari modul Roles game (nama modul diacak tiap update: dicari lewat isinya) ----------
-local Roles
+local Roles, Others
+local function skyp() -- data dari SkyP yang sedang jalan
+    local S = G.__Alfian
+    return type(S) == "table" and S or nil
+end
+-- require dengan batas waktu (modul yang masih dimuat bisa menahan selamanya)
+local function tryRequire(m)
+    local done, ok, v = false, false, nil
+    task.spawn(function()
+        ok, v = pcall(require, m)
+        done = true
+    end)
+    local t0 = os.clock()
+    while not done and os.clock() - t0 < 0.3 do task.wait() end
+    return done and ok, v
+end
+local searched = false
 local function findRoles()
     if Roles then return Roles end
-    if type(getloadedmodules) ~= "function" then return nil end
+    local S = skyp()
+    if S and type(S.Found) == "table" and type(S.Found.Roles) == "table" then
+        Roles = S.Found.Roles
+        return Roles
+    end
+    if searched or type(getloadedmodules) ~= "function" then return nil end
+    searched = true
     for _, m in ipairs(getloadedmodules()) do
-        local ok, v = pcall(require, m)
+        local ok, v = tryRequire(m)
         if ok and type(v) == "table" and type(rawget(v, "titlesOf")) == "function"
             and type(rawget(v, "isModerator")) == "function" then
             Roles = v
@@ -33,6 +60,29 @@ local function findRoles()
         end
     end
     return Roles
+end
+-- daftar pemain di world (punya list(), where(), playerAt())
+local othersSearched = false
+local function findOthers()
+    local S = skyp()
+    if S and type(S.Refs) == "table" and type(S.Refs.Others) == "table" then
+        Others = S.Refs.Others
+        return Others
+    end
+    if Others or othersSearched then return Others end
+    othersSearched = true
+    if type(getgc) ~= "function" then return nil end
+    pcall(function()
+        for i, v in ipairs(getgc(true)) do
+            if i % 4000 == 0 then task.wait() end
+            if type(v) == "table" and type(rawget(v, "list")) == "function" and type(rawget(v, "where")) == "function"
+                and type(rawget(v, "playerAt")) == "function" then
+                Others = v
+                break
+            end
+        end
+    end)
+    return Others
 end
 
 local function call(name, ...)
@@ -43,10 +93,34 @@ local function call(name, ...)
     return nil
 end
 
+-- isi lain data pemain world (selain id & nama) -> teks singkat
+local function extras(e)
+    local out, n = {}, 0
+    for k, v in pairs(e) do
+        if k ~= 1 and k ~= 2 and k ~= "userId" and k ~= "name" and type(v) ~= "function" and type(v) ~= "table" then
+            local sv = strip(v)
+            if sv ~= "" and sv ~= "0" and sv ~= "false" then
+                n += 1
+                if n > 6 then break end
+                out[#out + 1] = tostring(k) .. "=" .. sv
+            end
+        end
+    end
+    return table.concat(out, " ")
+end
+-- nama yang tampil punya title? (nama biasa = 1 kata tanpa spasi / kurung)
+local function nameTitle(name)
+    return string.find(name, "[%s%(%[]") ~= nil
+end
+
 -- info 1 pemain: { name, titles = {...}, staff = "Developer" / "Moderator" / nil, under = bool }
+-- p = { uid, name (nama di world), extra } atau Player Roblox
 local function infoOf(p)
-    local uid = p.UserId
-    local out = { name = p.DisplayName ~= p.Name and (p.DisplayName .. " (@" .. p.Name .. ")") or p.Name, titles = {} }
+    local uid = p.uid or p.UserId
+    local rname = p.name or (p.DisplayName ~= p.Name and (p.DisplayName .. " (@" .. p.Name .. ")") or p.Name)
+    local out = { name = rname, titles = {}, uid = uid }
+    out.nameTitle = p.name ~= nil and nameTitle(p.name)
+    out.extra = p.extra
     if call("isDeveloper", uid) then out.staff = "Developer" elseif call("isModerator", uid) then out.staff = "Moderator" end
     out.under = call("isUndercover", uid) == true
     local list = call("titlesOf", uid)
@@ -59,7 +133,7 @@ local function infoOf(p)
             end
         end
     end
-    out.special = out.staff ~= nil or out.under or #out.titles > 0
+    out.special = out.staff ~= nil or out.under or #out.titles > 0 or out.nameTitle
     return out
 end
 
@@ -124,9 +198,10 @@ close.BorderSizePixel = 0
 close.Parent = main
 Instance.new("UICorner", close).CornerRadius = UDim.new(0, 6)
 
-local onlyBtn = button(main, "Hanya ber-title: NYALA", 12, 150)
-local copyBtn = button(main, "Salin daftar", 168, 70)
-local minBtn = button(main, "–", 244, 44)
+local modeBtn = button(main, "Mode: Pemain", 12, 84)
+local onlyBtn = button(main, "Ber-title: NYALA", 100, 92)
+local copyBtn = button(main, "Salin", 196, 52)
+local minBtn = button(main, "–", 252, 36)
 
 local info = label(main, { Text = "-", TextSize = 11, TextColor3 = Color3.fromRGB(150, 160, 180),
     Position = UDim2.fromOffset(12, 62), Size = UDim2.new(1, -24, 0, 16) })
@@ -163,23 +238,185 @@ do
     end))
 end
 
+
+-- ================= MODE SEMUA TITLE: cari di data game =================
+local mode = "pemain"
+local catText = ""
+local TPAT = { "of legend", "^dr%.", "^mighty", "legend", " of the ", "^sir ", "^lord ", "^king ", "^queen " }
+local function isTitleStr(v)
+    if type(v) ~= "string" or #v > 60 or #v < 3 then return false end
+    local l = string.lower(strip(v))
+    for _, p in ipairs(TPAT) do
+        if string.find(l, p) then return true end
+    end
+    return false
+end
+local function short(v, depth)
+    depth = depth or 0
+    if type(v) ~= "table" then return strip(v) end
+    if depth > 1 then return "{...}" end
+    local out, n = {}, 0
+    for k, x in pairs(v) do
+        n += 1
+        if n > 10 then
+            out[#out + 1] = "..."
+            break
+        end
+        out[#out + 1] = tostring(k) .. "=" .. (type(x) == "function" and "fn" or short(x, depth + 1))
+    end
+    return "{" .. table.concat(out, ", ") .. "}"
+end
+
+local function scanCatalog()
+    local L = {}
+    local function add(t) L[#L + 1] = t end
+    add("=== Semua title di data game (SkyP Title Detector) ===")
+    -- modul yang diperiksa: dari SkyP (tanpa require) + semua modul yang dimuat game
+    local mods, seenMod = {}, {}
+    local S = skyp()
+    if S and type(S.Found) == "table" then
+        for k, v in pairs(S.Found) do
+            if type(v) == "table" and not seenMod[v] then
+                seenMod[v] = true
+                mods[#mods + 1] = { name = "SkyP." .. tostring(k), t = v }
+            end
+        end
+    end
+    if type(getloadedmodules) == "function" then
+        local t0 = os.clock()
+        for _, m in ipairs(getloadedmodules()) do
+            if os.clock() - t0 > 25 then break end
+            local ok, v = tryRequire(m)
+            if ok and type(v) == "table" and not seenMod[v] then
+                seenMod[v] = true
+                mods[#mods + 1] = { name = m.Name, t = v }
+            end
+        end
+    end
+    -- modul Roles: semua isinya
+    local R = findRoles()
+    if R then
+        add("-- Modul Roles --")
+        for k, v in pairs(R) do
+            if type(v) == "table" then
+                local c = 0
+                for _ in pairs(v) do c += 1 end
+                add(("  %s = tabel %d isi: %s"):format(tostring(k), c, short(v)))
+            else
+                add(("  %s = %s"):format(tostring(k), type(v) == "function" and "fn" or strip(v)))
+            end
+        end
+    end
+    -- telusuri: teks yang mirip title + tabel yang namanya mengandung "title"
+    local hits, tabs, seen = {}, {}, {}
+    for _, m in ipairs(mods) do
+        local nodes = 0
+        local function walk(t, path, depth)
+            if seen[t] or nodes > 4000 then return end
+            seen[t] = true
+            nodes += 1
+            pcall(function()
+                for k, v in pairs(t) do
+                    local kp = path .. "." .. tostring(k)
+                    if isTitleStr(v) and #hits < 300 then
+                        hits[#hits + 1] = ("%s = %s"):format(kp, strip(v))
+                    end
+                    if type(v) == "table" then
+                        if type(k) == "string" and string.find(string.lower(k), "title") and #tabs < 20 then
+                            local c = 0
+                            for _ in pairs(v) do c += 1 end
+                            tabs[#tabs + 1] = { path = kp, t = v, n = c }
+                        end
+                        if depth < 4 then walk(v, kp, depth + 1) end
+                    end
+                end
+            end)
+        end
+        walk(m.t, m.name, 0)
+    end
+    add(("-- Tabel bernama 'title': %d --"):format(#tabs))
+    for _, e in ipairs(tabs) do
+        add(("  %s (%d isi)"):format(e.path, e.n))
+        local n = 0
+        for k, v in pairs(e.t) do
+            n += 1
+            if n > 40 then
+                add("    ...")
+                break
+            end
+            add(("    %s = %s"):format(tostring(k), type(v) == "function" and "fn" or short(v)))
+        end
+    end
+    add(("-- Teks mirip title: %d --"):format(#hits))
+    for _, h in ipairs(hits) do add("  " .. h) end
+    add(("-- %d modul diperiksa --"):format(#mods))
+    return L
+end
+
+local function showLines(lines)
+    for _, c in ipairs(list:GetChildren()) do
+        if c:IsA("TextLabel") or c:IsA("Frame") then c:Destroy() end
+    end
+    for n, t in ipairs(lines) do
+        if n > 400 then break end
+        label(list, { Text = t, TextSize = 11, TextWrapped = true, Size = UDim2.new(1, -6, 0, 0),
+            AutomaticSize = Enum.AutomaticSize.Y, LayoutOrder = n,
+            TextColor3 = string.sub(t, 1, 2) == "--" and Color3.fromRGB(120, 200, 255) or Color3.fromRGB(230, 235, 245) })
+    end
+end
+
+local function runCatalog()
+    info.Text = "Mencari semua title di data game... (bisa 5-30 detik)"
+    showLines({ "Mencari..." })
+    task.spawn(function()
+        local ok, lines = pcall(scanCatalog)
+        if not App.alive or mode ~= "title" then return end
+        if not ok then lines = { "Error: " .. tostring(lines) } end
+        catText = table.concat(lines, "\n")
+        showLines(lines)
+        info.Text = ("Selesai: %d baris. Tekan Salin lalu tempel ke developer"):format(#lines)
+    end)
+end
+
 local onlySpecial = true
 local minimized = false
 local lastText = ""
 local known = {} -- [userId] = true: sudah pernah diberi notifikasi
 
 local function refresh()
-    if not findRoles() then
-        info.Text = "Modul Roles game belum ketemu (tunggu game selesai dimuat)"
-        return
-    end
+    if mode ~= "pemain" then return end
+    if info.Text == "-" then info.Text = "Mencari data game..." end
+    findRoles() -- boleh tidak ketemu: title di nama tetap terbaca
     for _, c in ipairs(list:GetChildren()) do
         if c:IsA("Frame") then c:Destroy() end
     end
     local rows, total, special = {}, 0, 0
-    for _, p in ipairs(Players:GetPlayers()) do
+    local src = {}
+    local O = findOthers()
+    local okL, wl = false, nil
+    if O then okL, wl = pcall(O.list) end
+    if okL and type(wl) == "table" then
+        App.src = "world ini"
+        for _, e in ipairs(wl) do
+            if type(e) == "table" then
+                local uid = tonumber(e[1] or e.userId)
+                local nm = strip(e[2] or e.name or uid)
+                src[#src + 1] = { uid = uid, name = nm, extra = extras(e), raw = e }
+            end
+        end
+    else
+        App.src = "server (data world tidak ketemu: jalankan SkyP dulu)"
+        for _, p in ipairs(Players:GetPlayers()) do src[#src + 1] = p end
+    end
+    App.raw = {}
+    for _, p in ipairs(src) do
         total += 1
         local i = infoOf(p)
+        if p.raw and #App.raw < 15 then
+            local parts = {}
+            for k, v in pairs(p.raw) do parts[#parts + 1] = tostring(k) .. "=" .. strip(v) end
+            App.raw[#App.raw + 1] = "{" .. table.concat(parts, ", ") .. "}"
+        end
         if i.special then special += 1 end
         if i.special or not onlySpecial then rows[#rows + 1] = { p = p, i = i } end
     end
@@ -195,7 +432,9 @@ local function refresh()
         local tags = {}
         if i.staff then tags[#tags + 1] = i.staff end
         if i.under then tags[#tags + 1] = "undercover" end
+        if i.nameTitle then tags[#tags + 1] = "title di nama" end
         for _, t in ipairs(i.titles) do tags[#tags + 1] = t end
+        if i.extra and i.extra ~= "" then tags[#tags + 1] = i.extra end
         local tagText = #tags > 0 and table.concat(tags, ", ") or "-"
         lines[#lines + 1] = i.name .. " : " .. tagText
         local row = Instance.new("Frame")
@@ -211,24 +450,42 @@ local function refresh()
             TextColor3 = i.staff and Color3.fromRGB(255, 140, 150) or Color3.fromRGB(120, 200, 255),
             TextTruncate = Enum.TextTruncate.AtEnd })
         -- notifikasi pemain ber-title / staff yang baru terlihat
-        if i.special and not known[r.p.UserId] and r.p ~= LocalPlayer then
-            known[r.p.UserId] = true
+        local key = i.uid or i.name
+        if i.special and key and not known[key] and i.uid ~= LocalPlayer.UserId then
+            known[key] = true
             if App.started then notify(i.staff and "STAFF terdeteksi" or "Pemain ber-title", i.name .. " : " .. tagText) end
         end
     end
-    info.Text = ("Server: %d pemain | ber-title / staff: %d | tampil: %d"):format(total, special, #rows)
-    lastText = table.concat(lines, "\n")
+    info.Text = ("%s: %d pemain | ber-title / staff: %d"):format(tostring(App.src), total, special)
+    lastText = table.concat(lines, "\n") .. "\n\n-- data mentah --\n" .. table.concat(App.raw or {}, "\n")
     App.started = true
 end
 
 onlyBtn.MouseButton1Click:Connect(function()
+    if mode == "title" then
+        runCatalog() -- di mode Semua title tombol ini = scan ulang
+        return
+    end
     onlySpecial = not onlySpecial
-    onlyBtn.Text = "Hanya ber-title: " .. (onlySpecial and "NYALA" or "MATI")
+    onlyBtn.Text = "Ber-title: " .. (onlySpecial and "NYALA" or "MATI")
     refresh()
+end)
+modeBtn.MouseButton1Click:Connect(function()
+    mode = (mode == "pemain") and "title" or "pemain"
+    modeBtn.Text = "Mode: " .. (mode == "pemain" and "Pemain" or "Semua title")
+    if mode == "title" then
+        onlyBtn.Text = "Scan ulang"
+        runCatalog()
+    else
+        onlyBtn.Text = "Ber-title: " .. (onlySpecial and "NYALA" or "MATI")
+        showLines({})
+        info.Text = "Memuat pemain..."
+        refresh()
+    end
 end)
 copyBtn.MouseButton1Click:Connect(function()
     local clip = setclipboard or toclipboard
-    if type(clip) == "function" and pcall(clip, lastText) then
+    if type(clip) == "function" and pcall(clip, mode == "title" and catText or lastText) then
         notify("Title Detector", "Daftar disalin ke clipboard")
     else
         notify("Title Detector", "Executor tidak bisa menyalin")
