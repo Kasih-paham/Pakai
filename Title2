@@ -1,7 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) dan Content Creator sengaja tidak disediakan.
@@ -179,14 +179,15 @@ local function hook()
         local sz = tbl("TITLE_SIZES")
         if me and F.Title and sz and sz[F.Title] then return true, sz[F.Title] end
     end)
+    -- v3: game mengembalikan TEKS gambar ("rbxassetid://..."), bukan tabel {scale, image}.
+    -- Badge title dipaksa juga saat "of Legend" nyala (kalau tidak, bola Legend yang tampil).
     wrap("badgeOf", function(me)
         local b = tbl("TITLE_BADGES")
-        if me and F.Title and b and b[F.Title] ~= nil then return true, b[F.Title] end
+        local e = me and F.Title and b and b[F.Title]
+        if type(e) == "table" then e = rawget(e, "image") end
+        if type(e) == "string" then return true, e end
     end)
-    wrap("wrenchOf", function(me)
-        local w = tbl("TITLE_WRENCHES")
-        if me and F.Title and w and w[F.Title] ~= nil then return true, w[F.Title] end
-    end)
+    wrap("wrenchOf", nil) -- hanya dicatat
     -- hanya dicatat (bentuk jawabannya belum diketahui)
     for _, nm in ipairs({ "titleColor", "tagColor", "tagText", "stillTag", "nameKey", "nameCode", "nameOf", "lineName" }) do
         wrap(nm, nil)
@@ -314,7 +315,7 @@ bCopy.MouseButton1Click:Connect(function()
 end)
 
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v2: diagnosa",
+    local out = { "-- SkyP Title Visual v3: diagnosa",
         ("pilihan: legend=%s dr=%s title=%s guild=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
             tostring(F.Title), tostring(F.Guild), tostring(myId), myName) }
     local names = {}
