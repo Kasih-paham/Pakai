@@ -1,10 +1,10 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v9: hijau pemilik world dihilangkan (nameCode). v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v10: semua title + tombol katalog. v9: hijau pemilik world dihilangkan (nameCode). v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
--- Title staff (Developer / Moderator / Admin) dan Content Creator sengaja tidak disediakan.
+-- Title staff (Developer / Moderator / Admin) sengaja tidak disediakan (bisa membuka menu staff di game).
 
 local Players = game:GetService("Players")
 local StarterGui = game:GetService("StarterGui")
@@ -249,8 +249,8 @@ local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetServi
 if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 394)
-main.Position = UDim2.new(0, 20, 0.5, -197)
+main.Size = UDim2.fromOffset(280, 426)
+main.Position = UDim2.new(0, 20, 0.5, -213)
 main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
 main.BorderSizePixel = 0
 main.Active = true
@@ -309,8 +309,9 @@ local bCopy = btn("Salin pilihan", 194)
 local bDiag = btn("Salin diagnosa + struktur nama", 226)
 local bBadge = btn("", 258)
 local bOwner = btn("", 290)
+local bCat = btn("Katalog semua title + efek (salin)", 322)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
-    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 324), Size = UDim2.new(1, -24, 0, 66) })
+    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 356), Size = UDim2.new(1, -24, 0, 66) })
 
 local titleIdx, guildIdx, colorIdx = 0, 1, 1
 local function titleName()
@@ -480,7 +481,7 @@ dumpTag = function(out)
 end
 
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v9: diagnosa",
+    local out = { "-- SkyP Title Visual v10: diagnosa",
         ("pilihan: legend=%s dr=%s title=%s guild=%s color=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
             tostring(F.Title), tostring(F.Guild), COLORS[colorIdx][2], tostring(myId), myName) }
     local names = {}
@@ -497,6 +498,79 @@ bDiag.MouseButton1Click:Connect(function()
     local clip = setclipboard or toclipboard
     if type(clip) == "function" and pcall(clip, txt) then
         notify("Title Visual", "Diagnosa disalin, tempel ke developer")
+    else
+        notify("Title Visual", "Executor tidak bisa menyalin")
+        print(txt)
+    end
+end)
+
+-- v10: KATALOG. Tiap title dicoba satu per satu (dalam satu langkah, tanpa jeda) lewat fungsi game yang sudah dibungkus,
+-- lalu dicatat apa yang berubah: teks nama, kode warna, ukuran, badge, wrench. Ditambah varian of Legend & Dr.
+local function catalog()
+    if not R then return nil end
+    local save = { F.On, F.Title, F.Legend, F.Dr, F.Guild }
+    local nameFn = rawget(R, "nameOf")
+    local okN, myShown = pcall(nameFn, LocalPlayer)
+    myShown = okN and type(myShown) == "string" and myShown or myName
+    local function call(nm, ...)
+        local fn = rawget(R, nm)
+        if type(fn) ~= "function" then return "-" end
+        local r = { pcall(fn, ...) }
+        if not r[1] then return "ERR" end
+        return short(r[2])
+    end
+    local function row(label)
+        return ("%-24s teks=%s | warna(lineName)=%s | kode=%s | ukuran=%s | badge=%s | wrench=%s | tagColor=%s"):format(
+            label, call("tagText", myShown, myId), call("lineName", myShown, myId, nil, nil), call("nameCode", myId),
+            call("tagSize", myId), call("badgeOf", myId), call("wrenchOf", myId), call("tagColor", myId))
+    end
+    local out = { "-- SkyP Title Visual v10: KATALOG SEMUA TITLE (dicoba di nama sendiri, hanya layar sendiri)",
+        "-- kode warna gaya Growtopia: w putih, 2 hijau, 4 merah, dst. Kode di depan nama: `kode...``" }
+    F.On, F.Guild = true, nil
+    F.Legend, F.Dr, F.Title = false, false, nil
+    out[#out + 1] = row("(tanpa title)")
+    for _, t in ipairs(TITLES) do
+        F.Legend, F.Dr, F.Title = false, false, t.key
+        out[#out + 1] = row(t.name .. " [" .. t.key .. "]")
+    end
+    out[#out + 1] = "-- varian"
+    F.Title, F.Legend, F.Dr = nil, true, false
+    out[#out + 1] = row("of Legend (legendOn)")
+    F.Legend, F.Dr = false, true
+    out[#out + 1] = row("Dr. (drOn)")
+    F.Legend, F.Dr = true, true
+    out[#out + 1] = row("Dr. + of Legend")
+    F.On, F.Title, F.Legend, F.Dr, F.Guild = save[1], save[2], save[3], save[4], save[5]
+    -- semua isi modul Roles (tabel & nilai), supaya tidak ada yang terlewat
+    out[#out + 1] = "-- isi modul Roles"
+    local keys = {}
+    for k in pairs(R) do keys[#keys + 1] = tostring(k) end
+    table.sort(keys)
+    for _, k in ipairs(keys) do
+        local v = rawget(R, k)
+        if type(v) == "table" then
+            local parts = {}
+            for kk, vv in pairs(v) do parts[#parts + 1] = tostring(kk) .. "=" .. short(vv) end
+            table.sort(parts)
+            out[#out + 1] = ("   %s = { %s }"):format(k, table.concat(parts, ", "))
+        elseif type(v) ~= "function" then
+            out[#out + 1] = ("   %s = %s"):format(k, short(v))
+        end
+    end
+    local fns = {}
+    for _, k in ipairs(keys) do if type(rawget(R, k)) == "function" then fns[#fns + 1] = k end end
+    out[#out + 1] = "   fungsi: " .. table.concat(fns, ", ")
+    return table.concat(out, "\n")
+end
+bCat.MouseButton1Click:Connect(function()
+    local ok, txt = pcall(catalog)
+    if not ok or not txt then
+        notify("Title Visual", "Katalog gagal: " .. tostring(txt))
+        return
+    end
+    local clip = setclipboard or toclipboard
+    if type(clip) == "function" and pcall(clip, txt) then
+        notify("Title Visual", "Katalog disalin (" .. #TITLES .. " title), tempel ke developer")
     else
         notify("Title Visual", "Executor tidak bisa menyalin")
         print(txt)
@@ -684,10 +758,27 @@ task.spawn(function()
         stat.Text = "Modul Roles game tidak ketemu. Jalankan SkyP dulu, lalu script ini"
         return
     end
-    for _, src in ipairs({ rawget(R, "TITLES"), rawget(R, "TITLE_NAMES") }) do
-        if type(src) == "table" then
-            for k, nm in pairs(src) do
-                if type(k) == "string" and k ~= "cc" then TITLES[#TITLES + 1] = { key = k, name = tostring(nm) } end
+    -- v10: SEMUA kunci title dari semua tabel title game (nama dari TITLE_NAMES / TITLES / titleName)
+    local seen = {}
+    local names = {}
+    for _, src in ipairs({ "TITLES", "TITLE_NAMES" }) do
+        local t = rawget(R, src)
+        if type(t) == "table" then for k, nm in pairs(t) do names[k] = names[k] or tostring(nm) end end
+    end
+    for _, src in ipairs({ "TITLES", "TITLE_NAMES", "TITLE_BADGES", "TITLE_SIZES", "TITLE_WRENCHES", "DONOR_TITLES" }) do
+        local t = rawget(R, src)
+        if type(t) == "table" then
+            for k in pairs(t) do
+                if type(k) == "string" and not seen[k] then
+                    seen[k] = true
+                    local nm = names[k]
+                    if not nm then
+                        local fn = rawget(R, "titleName")
+                        local ok, v = pcall(fn, k)
+                        nm = ok and type(v) == "string" and v or k
+                    end
+                    TITLES[#TITLES + 1] = { key = k, name = nm }
+                end
             end
         end
     end
