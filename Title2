@@ -1,7 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v12: kode efek {title} lewat nameCode + decompile BitmapText. v11: tombol decompile kode game nama. v10: semua title + tombol katalog. v9: hijau pemilik world dihilangkan (nameCode). v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v13: mode atribut Player (WornTitle dll). v12: kode efek {title} lewat nameCode + decompile BitmapText. v11: tombol decompile kode game nama. v10: semua title + tombol katalog. v9: hijau pemilik world dihilangkan (nameCode). v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) sengaja tidak disediakan (bisa membuka menu staff di game).
@@ -46,7 +46,7 @@ local function findRoles()
 end
 
 local R -- modul Roles
-local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Color = nil, NoOwner = true, FxCode = true, Calls = {}, Orig = {} }
+local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Color = nil, NoOwner = true, FxCode = true, Attr = true, Calls = {}, Orig = {} }
 App.F = F
 local TITLES = {}                 -- { { key, name } }
 local GUILDS = { 0, 4, 3, 2 }     -- 0 = tidak ada / GL / GC / GE
@@ -260,8 +260,8 @@ local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetServi
 if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 490)
-main.Position = UDim2.new(0, 20, 0.5, -245)
+main.Size = UDim2.fromOffset(280, 522)
+main.Position = UDim2.new(0, 20, 0.5, -261)
 main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
 main.BorderSizePixel = 0
 main.Active = true
@@ -323,8 +323,9 @@ local bOwner = btn("", 290)
 local bCat = btn("Katalog semua title + efek (salin)", 322)
 local bCode = btn("Salin kode game nama (decompile)", 354)
 local bFx = btn("", 386)
+local bAttr = btn("", 418)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
-    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 420), Size = UDim2.new(1, -24, 0, 66) })
+    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 452), Size = UDim2.new(1, -24, 0, 66) })
 
 local titleIdx, guildIdx, colorIdx = 0, 1, 1
 local function titleName()
@@ -336,6 +337,7 @@ local function paint()
     bBadge.Text = "Badge + wrench title: " .. (F.Badge and "NYALA" or "MATI")
     bOwner.Text = "Hijau pemilik world: " .. (F.NoOwner and "DIHILANGKAN" or "ASLI")
     bFx.Text = "Efek title (kode {title}): " .. (F.FxCode and "NYALA" or "MATI")
+    bAttr.Text = "Mode atribut (data title game): " .. (F.Attr and "NYALA" or "MATI")
     bLegend.Text = "of Legend: " .. (F.Legend and "NYALA" or "MATI")
     bDr.Text = "Dr.: " .. (F.Dr and "NYALA" or "MATI")
     bTitle.Text = "Title: " .. titleName() .. "  ›"
@@ -346,6 +348,7 @@ bOn.MouseButton1Click:Connect(function() F.On = not F.On paint() end)
 bBadge.MouseButton1Click:Connect(function() F.Badge = not F.Badge paint() end)
 bOwner.MouseButton1Click:Connect(function() F.NoOwner = not F.NoOwner paint() end)
 bFx.MouseButton1Click:Connect(function() F.FxCode = not F.FxCode paint() end)
+bAttr.MouseButton1Click:Connect(function() F.Attr = not F.Attr paint() end)
 bLegend.MouseButton1Click:Connect(function() F.Legend = not F.Legend paint() end)
 bDr.MouseButton1Click:Connect(function() F.Dr = not F.Dr paint() end)
 bTitle.MouseButton1Click:Connect(function()
@@ -496,7 +499,7 @@ dumpTag = function(out)
 end
 
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v12: diagnosa",
+    local out = { "-- SkyP Title Visual v13: diagnosa",
         ("pilihan: legend=%s dr=%s title=%s guild=%s color=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
             tostring(F.Title), tostring(F.Guild), COLORS[colorIdx][2], tostring(myId), myName) }
     local names = {}
@@ -674,7 +677,7 @@ local function windows(txt, keys, n, cap)
     return table.concat(out, "\n")
 end
 local function gameCode()
-    local out = { "-- SkyP Title Visual v12: KODE GAME (decompile) untuk warna & efek title" }
+    local out = { "-- SkyP Title Visual v13: KODE GAME (decompile) untuk warna & efek title" }
     -- 1) modul Roles utuh (fungsi titleOf, tagColor, nameCode, tagText, ...)
     local ri = findRolesInst()
     if ri then
@@ -683,6 +686,17 @@ local function gameCode()
         out[#out + 1] = txt and (#txt > 60000 and (string.sub(txt, 1, 60000) .. "\n... (dipotong)") or txt) or ("gagal: " .. tostring(err))
         -- v12: modul BitmapText (yang menggambar kode warna "`w" dan kode efek "`{title}")
         local bt = ri.Parent and ri.Parent:FindFirstChild("BitmapText")
+        if not bt and type(getloadedmodules) == "function" then
+            -- nama modul diacak game: cari modul yang COLORS.d-nya sama dengan Roles.DEVELOPER_COLOR
+            local dev = rawget(R, "DEVELOPER_COLOR")
+            for _, m in ipairs(getloadedmodules()) do
+                local ok, v = tryRequire(m)
+                if ok and type(v) == "table" and type(rawget(v, "COLORS")) == "table" and dev ~= nil and v.COLORS.d == dev then
+                    bt = m
+                    break
+                end
+            end
+        end
         if bt then
             local t2, e2 = decompileText(bt)
             out[#out + 1] = "== Modul BitmapText: " .. bt:GetFullName() .. " =="
@@ -892,8 +906,56 @@ task.spawn(function()
     badgeClear()
 end)
 
+-- v13: MODE ATRIBUT. Data title game ada di atribut objek Player (lihat kode Roles):
+--   WornTitle (title dipakai), HasLegend + HideLegendUntil (of Legend), DrTitle + WearDr + HideDrUntil (Dr.),
+--   GuildRank (tag guild). Penggambar nama game (diproteksi) membaca atribut ini.
+-- Atribut diubah di sisi client = hanya layar sendiri (tidak terkirim ke server). Nilai asli disimpan & dikembalikan.
+F.AttrOrig = nil
+local ATTRS = { "WornTitle", "HasLegend", "HideLegendUntil", "DrTitle", "WearDr", "HideDrUntil", "GuildRank" }
+local function attrWant()
+    return {
+        WornTitle = F.Title or (F.Dr and "dr") or "none",
+        HasLegend = F.Legend or nil,
+        HideLegendUntil = F.Legend and 0 or nil,
+        DrTitle = F.Dr or nil,
+        WearDr = F.Dr or nil,
+        HideDrUntil = F.Dr and 0 or nil,
+        GuildRank = F.Guild,
+    }
+end
+local function attrRestore()
+    local o = F.AttrOrig
+    if not o then return end
+    F.AttrOrig = nil
+    for _, k in ipairs(ATTRS) do
+        pcall(function() LocalPlayer:SetAttribute(k, o[k]) end)
+    end
+end
+local function attrTick()
+    if not (F.On and F.Attr) then attrRestore() return end
+    if not F.AttrOrig then
+        local o = {}
+        for _, k in ipairs(ATTRS) do o[k] = LocalPlayer:GetAttribute(k) end
+        F.AttrOrig = o
+    end
+    local want = attrWant()
+    for _, k in ipairs(ATTRS) do
+        local v = want[k]
+        if v == nil then v = F.AttrOrig[k] end -- pilihan "mati" = nilai asli akun
+        if k == "HasLegend" and not F.Legend then v = F.AttrOrig[k] end
+        if LocalPlayer:GetAttribute(k) ~= v then pcall(function() LocalPlayer:SetAttribute(k, v) end) end
+    end
+end
+task.spawn(function()
+    while App.alive do
+        pcall(attrTick)
+        task.wait(0.5)
+    end
+end)
+
 function App.stop()
     App.alive = false
+    attrRestore()
     unhook() -- fungsi game dikembalikan seperti semula
     badgeClear()
     fixRestore()
