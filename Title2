@@ -1,7 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) dan Content Creator sengaja tidak disediakan.
@@ -229,8 +229,8 @@ local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetServi
 if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 330)
-main.Position = UDim2.new(0, 20, 0.5, -165)
+main.Size = UDim2.fromOffset(280, 362)
+main.Position = UDim2.new(0, 20, 0.5, -181)
 main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
 main.BorderSizePixel = 0
 main.Active = true
@@ -287,8 +287,9 @@ local bTitle = btn("", 130)
 local bGuild = btn("", 162)
 local bCopy = btn("Salin pilihan", 194)
 local bDiag = btn("Salin diagnosa + struktur nama", 226)
+local bBadge = btn("", 258)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
-    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 260), Size = UDim2.new(1, -24, 0, 66) })
+    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 292), Size = UDim2.new(1, -24, 0, 66) })
 
 local titleIdx, guildIdx = 0, 1
 local function titleName()
@@ -297,6 +298,7 @@ local function titleName()
 end
 local function paint()
     bOn.Text = "Title visual: " .. (F.On and "NYALA" or "MATI")
+    bBadge.Text = "Badge buatan (kiri nama): " .. (F.Badge and "NYALA" or "MATI")
     bLegend.Text = "of Legend: " .. (F.Legend and "NYALA" or "MATI")
     bDr.Text = "Dr.: " .. (F.Dr and "NYALA" or "MATI")
     bTitle.Text = "Title: " .. titleName() .. "  ›"
@@ -304,6 +306,7 @@ local function paint()
 end
 
 bOn.MouseButton1Click:Connect(function() F.On = not F.On paint() end)
+bBadge.MouseButton1Click:Connect(function() F.Badge = not F.Badge paint() end)
 bLegend.MouseButton1Click:Connect(function() F.Legend = not F.Legend paint() end)
 bDr.MouseButton1Click:Connect(function() F.Dr = not F.Dr paint() end)
 bTitle.MouseButton1Click:Connect(function()
@@ -350,33 +353,60 @@ probe = function(out)
 end
 
 -- v4: struktur nametag sendiri (kotak berisi "BitmapText" tepat di atas tengah layar)
-dumpTag = function(out)
-    out[#out + 1] = "-- struktur nametag"
+-- v5: nametag sendiri dicari HANYA di layar world (GameGui), semua induknya harus terlihat
+local SKIP_GUI = { MenuGui = true, ChatGui = true, InventoryGui = true, MobileGui = true, PingGui = true,
+    VersionGui = true, TextureKeep = true, SkyPTitleFx = true }
+local function shown(o)
+    while o and not o:IsA("LayerCollector") do
+        if o:IsA("GuiObject") and not o.Visible then return false end
+        o = o.Parent
+    end
+    return o ~= nil and o.Enabled
+end
+local function findOwnTag()
     local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
-    if not pg then out[#out + 1] = "PlayerGui tidak ada" return end
+    if not pg then return nil, 0 end
+    local roots = {}
+    local gg = pg:FindFirstChild("GameGui")
+    if gg then
+        roots[1] = gg
+    else
+        for _, top in ipairs(pg:GetChildren()) do
+            if top:IsA("LayerCollector") and not SKIP_GUI[top.Name] then roots[#roots + 1] = top end
+        end
+    end
     local cam = workspace.CurrentCamera
     local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
     local cx, cy = vp.X / 2, vp.Y / 2
-    local cands = {}
-    for _, bm in ipairs(pg:GetDescendants()) do
-        if bm.Name == "BitmapText" and bm:IsA("GuiObject") and bm.Visible and bm.AbsoluteSize.X > 0 then
-            local o = bm.Parent
-            if o and o:IsA("GuiObject") then
+    local best, bestScore, n = nil, nil, 0
+    for _, root in ipairs(roots) do
+        for _, bm in ipairs(root:GetDescendants()) do
+            if bm.Name == "BitmapText" and bm:IsA("GuiObject") and bm.AbsoluteSize.X > 0 and bm.Parent
+                and bm.Parent:IsA("GuiObject") then
                 local p, sz = bm.AbsolutePosition, bm.AbsoluteSize
                 local dx = math.abs(p.X + sz.X / 2 - cx)
                 local dy = cy - (p.Y + sz.Y / 2)
-                if dx <= vp.X * 0.12 and dy > vp.Y * 0.02 and dy < vp.Y * 0.45 then
-                    cands[#cands + 1] = { bm = bm, score = dx * 3 + dy }
+                if dx <= vp.X * 0.12 and dy > vp.Y * 0.02 and dy < vp.Y * 0.45 and shown(bm) then
+                    n += 1
+                    local score = dx * 3 + dy
+                    if not bestScore or score < bestScore then best, bestScore = bm, score end
                 end
             end
         end
     end
-    table.sort(cands, function(a, b) return a.score < b.score end)
-    out[#out + 1] = ("kandidat: %d | layar %dx%d"):format(#cands, math.floor(vp.X), math.floor(vp.Y))
+    return best, n, cx, cy, vp
+end
+
+dumpTag = function(out)
+    out[#out + 1] = "-- struktur nametag"
+    local bm, n, cx, cy, vp = findOwnTag()
+    out[#out + 1] = ("kandidat: %d | layar %dx%d | SkyP jalan: %s"):format(n, math.floor(vp and vp.X or 0),
+        math.floor(vp and vp.Y or 0), tostring(type(G.__Alfian) == "table"))
+    local cands = { bm and { bm = bm } or nil }
     local c = cands[1]
     if not c then return end
     local root = c.bm.Parent
-    if root.Parent and root.Parent:IsA("GuiObject") then root = root.Parent end
+    if root.Parent and root.Parent:IsA("GuiObject") and root.Parent.AbsoluteSize.Y < vp.Y * 0.3 then root = root.Parent end
     out[#out + 1] = "jalur: " .. root:GetFullName()
     local lines = 0
     local function props(o)
@@ -425,7 +455,7 @@ dumpTag = function(out)
 end
 
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v4: diagnosa",
+    local out = { "-- SkyP Title Visual v5: diagnosa",
         ("pilihan: legend=%s dr=%s title=%s guild=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
             tostring(F.Title), tostring(F.Guild), tostring(myId), myName) }
     local names = {}
@@ -467,9 +497,70 @@ do
     end))
 end
 
+-- v5: BADGE BUATAN SENDIRI. Gambar badge title ditempel di kiri nama (hanya di layar sendiri),
+-- karena game tidak menggambar badge walau badgeOf sudah menjawab gambar title.
+F.Badge = true
+local badgeObj
+local function badgeClear()
+    if badgeObj then pcall(function() badgeObj:Destroy() end) end
+    badgeObj = nil
+end
+local function badgeTick()
+    if not (F.On and F.Badge and F.Title and R) then badgeClear() return end
+    local b = tbl("TITLE_BADGES")
+    local e = b and b[F.Title]
+    local img = type(e) == "table" and rawget(e, "image") or e
+    if type(img) ~= "string" then badgeClear() return end -- Legend: bola emas digambar game sendiri
+    -- nametag yang sudah ketemu dipakai terus; dicari ulang paling sering tiap 1 detik (hemat)
+    local bm = F.TagBm
+    if not (bm and bm.Parent and bm:IsDescendantOf(game) and shown(bm)) then
+        bm = nil
+        if os.clock() - (F.TagScanAt or 0) >= 1 then
+            F.TagScanAt = os.clock()
+            bm = findOwnTag()
+        end
+        F.TagBm = bm
+    end
+    if not bm then return end
+    local holder = bm.Parent
+    if not badgeObj or badgeObj.Parent ~= holder then
+        badgeClear()
+        badgeObj = Instance.new("ImageLabel")
+        badgeObj.Name = "SkyPBadge"
+        badgeObj.BackgroundTransparency = 1
+        badgeObj.ScaleType = Enum.ScaleType.Fit
+        badgeObj.ZIndex = bm.ZIndex + 1
+        badgeObj.Parent = holder
+    end
+    local scale = type(e) == "table" and tonumber(rawget(e, "scale")) or 1
+    local cell = type(e) == "table" and tonumber(rawget(e, "cell")) or nil
+    local H = bm.AbsoluteSize.Y
+    local size = math.floor(H * 1.25 * scale + 0.5)
+    badgeObj.Image = img
+    badgeObj.ImageRectSize = cell and Vector2.new(cell, cell) or Vector2.zero
+    badgeObj.ImageRectOffset = Vector2.zero
+    badgeObj.Size = UDim2.fromOffset(size, size)
+    local list = holder:FindFirstChildOfClass("UIListLayout")
+    if list then
+        badgeObj.LayoutOrder = -1000
+    else
+        local hp = holder.AbsolutePosition
+        local p = bm.AbsolutePosition
+        badgeObj.Position = UDim2.fromOffset(math.floor(p.X - hp.X - size - 3), math.floor(p.Y - hp.Y + (H - size) / 2))
+    end
+end
+task.spawn(function()
+    while App.alive do
+        pcall(badgeTick)
+        task.wait(0.25)
+    end
+    badgeClear()
+end)
+
 function App.stop()
     App.alive = false
     unhook() -- fungsi game dikembalikan seperti semula
+    badgeClear()
     for _, c in ipairs(App.conns) do pcall(function() c:Disconnect() end) end
     if gui.Parent then gui:Destroy() end
 end
