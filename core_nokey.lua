@@ -1,7 +1,7 @@
 local SKYP = ...
 if type(SKYP) ~= "table" then
 SKYP = {
-version = "v2.11.1",
+version = "v2.11.3",
 shared = {},
 onStop = {},
 isAlive = function() return true end,
@@ -50,7 +50,7 @@ return G.__Alfian == Session and SKYP.isAlive()
 end
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
 Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.11.1" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.11.3" end
 do
 local Lic = Session.Lic
 local HS = game:GetService("HttpService")
@@ -10644,6 +10644,442 @@ local SetTab = makeTab("Pengaturan", "sliders-horizontal", "setel")
 Box.VisTab = makeTab("Tampilan", "palette", "visual")
 Box.VisPerf = box(Box.VisTab, "HP ringan", true)
 Box.VisFx = box(Box.VisTab, "Animasi & suara", true)
+Box.VisItem = box(Box.VisTab, "Item visual (hanya kamu yang lihat)", true)
+function UI.visualReport()
+local L = {}
+local function add(t) L[#L + 1] = tostring(t) end
+local function short(v)
+local tv = type(v)
+if tv == "table" then
+local c = 0
+for _ in pairs(v) do
+c += 1
+if c > 99 then break end
+end
+return "{" .. c .. "}"
+elseif tv == "function" then
+return "fn"
+elseif tv == "userdata" then
+return typeof(v)
+end
+return string.sub(tostring(v), 1, 40)
+end
+local function keys(t, max)
+local out, n = {}, 0
+local ok = pcall(function()
+for k, v in pairs(t) do
+n += 1
+if n > (max or 40) then break end
+out[#out + 1] = tostring(k) .. "=" .. short(v)
+end
+end)
+if not ok then return "(tidak bisa dibaca)" end
+table.sort(out)
+if n > (max or 40) then out[#out + 1] = "..." end
+return table.concat(out, ", ")
+end
+local PAT = { "cloth", "wear", "equip", "skin", "avatar", "outfit", "look", "sprite", "icon", "hat", "wing", "back", "face", "hair", "shirt", "pant", "shoe", "hand" }
+local function hit(name)
+name = string.lower(tostring(name))
+for _, p in ipairs(PAT) do
+if string.find(name, p, 1, true) then return true end
+end
+return false
+end
+add("=== Cek data visual SkyP v" .. tostring(Session.Lic.Ver) .. " ===")
+local kinds, sample = {}, {}
+for id, it in pairs(ItemDB) do
+local k = tostring(rawget(it, "kind"))
+kinds[k] = (kinds[k] or 0) + 1
+if (k == "cloth" or k == "clothes" or k == "wear" or k == "clothing") and #sample < 3 then sample[#sample + 1] = id end
+end
+local kp = {}
+for k, n in pairs(kinds) do kp[#kp + 1] = k .. " " .. n end
+table.sort(kp)
+add("-- Jenis item: " .. table.concat(kp, ", "))
+for _, id in ipairs(sample) do
+local it = ItemDB[id]
+add(("-- Item baju [%d] %s: %s"):format(id, tostring(rawget(it, "name")), keys(it, 40)))
+for k, v in pairs(it) do
+if type(v) == "table" then add(("   .%s = %s"):format(tostring(k), keys(v, 20))) end
+end
+end
+if ItemDB[2] then add("-- Item [2] (block): " .. keys(ItemDB[2], 40)) end
+if type(Refs.State) == "table" then
+add("-- Refs.State: " .. keys(Refs.State, 60))
+for k, v in pairs(Refs.State) do
+if type(v) == "table" and hit(k) then add(("   .%s = %s"):format(tostring(k), keys(v, 30))) end
+end
+else
+add("-- Refs.State: tidak ada")
+end
+if type(Refs.Others) == "table" then
+local _, first = next(Refs.Others)
+add("-- Refs.Others (1 pemain): " .. (type(first) == "table" and keys(first, 50) or short(first)))
+end
+if type(Refs.Hud) == "table" then
+local fns = {}
+pcall(function()
+for k, v in pairs(Refs.Hud) do
+if type(v) == "function" and hit(k) then fns[#fns + 1] = tostring(k) end
+end
+end)
+table.sort(fns)
+add("-- Refs.Hud (fungsi terkait): " .. (#fns > 0 and table.concat(fns, ", ") or "-"))
+end
+if getloadedmodules then
+local n = 0
+pcall(function()
+for _, m in ipairs(getloadedmodules()) do
+local ok, v = pcall(require, m)
+if ok and type(v) == "table" then
+local names = {}
+for k, f in pairs(v) do
+if hit(k) then names[#names + 1] = tostring(k) .. (type(f) == "function" and "()" or "") end
+end
+if #names > 0 or hit(m.Name) then
+n += 1
+if n <= 25 then
+table.sort(names)
+add(("-- Modul %s: %s"):format(m.Name, #names > 0 and table.concat(names, ", ") or keys(v, 15)))
+end
+end
+end
+end
+end)
+end
+local icons = 0
+pcall(function()
+for _, o in ipairs(PlayerGui:GetDescendants()) do
+if icons >= 8 then break end
+if (o:IsA("ImageLabel") or o:IsA("ImageButton")) and o.ImageRectSize.X > 0 and o.Visible then
+icons += 1
+add(("-- Ikon %s/%s: %s rect=%s/%s"):format(o.Parent and o.Parent.Name or "-", o.Name, o.Image,
+tostring(o.ImageRectOffset), tostring(o.ImageRectSize)))
+end
+end
+end)
+pcall(function()
+local names = { LocalPlayer.Name, LocalPlayer.DisplayName, tostring(LocalPlayer.UserId) }
+local found = 0
+for _, root in ipairs({ PlayerGui, workspace }) do
+for _, o in ipairs(root:GetDescendants()) do
+if found >= 2 then break end
+if table.find(names, o.Name) and #o:GetChildren() > 0 then
+found += 1
+local kids = {}
+for _, c in ipairs(o:GetChildren()) do
+local gk = {}
+for _, g in ipairs(c:GetChildren()) do
+if #gk >= 8 then break end
+gk[#gk + 1] = g.Name .. ":" .. g.ClassName
+end
+kids[#kids + 1] = c.Name .. ":" .. c.ClassName .. (#gk > 0 and (" [" .. table.concat(gk, ", ") .. "]") or "")
+if #kids >= 15 then break end
+end
+add(("-- Karakter %s (%s): %s"):format(o:GetFullName(), o.ClassName, table.concat(kids, " | ")))
+end
+end
+end
+if found == 0 then add("-- Karakter: objek bernama pemain tidak ketemu") end
+end)
+local txt = table.concat(L, "\n")
+if #txt > 9000 then txt = string.sub(txt, 1, 9000) .. "\n...(dipotong)" end
+local clip = setclipboard or toclipboard
+local copied = type(clip) == "function" and pcall(clip, txt)
+warn("[SkyP] " .. txt)
+return txt, copied
+end
+UI.Vis = { Wear = {}, Status = "Mati", Applied = {}, Pick = nil, Found = nil }
+Config.add("Visual", UI.Vis, { "Wear" })
+do (function()
+local V = UI.Vis
+local SLOTKEYS = { "slot", "part", "bodyPart", "bodypart", "clothType", "clothSlot", "wearSlot", "layer", "category", "sub", "subtype", "type" }
+local WEARPAT = { "cloth", "wear", "equip", "outfit", "look", "avatar", "skin" }
+local function isCloth(id)
+local it = type(id) == "number" and ItemDB[id] or nil
+if type(it) ~= "table" then return false end
+local k = string.lower(tostring(rawget(it, "kind") or ""))
+return string.find(k, "cloth", 1, true) ~= nil or string.find(k, "wear", 1, true) ~= nil
+end
+local function slotOf(id)
+local it = ItemDB[id]
+if type(it) ~= "table" then return nil end
+for _, k in ipairs(SLOTKEYS) do
+local v = rawget(it, k)
+if (type(v) == "number" or type(v) == "string") and tostring(v) ~= "" then return k .. "=" .. tostring(v) end
+end
+return nil
+end
+local function wearName(k)
+k = string.lower(tostring(k))
+for _, p in ipairs(WEARPAT) do
+if string.find(k, p, 1, true) then return true end
+end
+return false
+end
+local function scoreWear(t)
+local n = 0
+local ok = pcall(function()
+local c = 0
+for _, v in pairs(t) do
+c += 1
+if c > 40 then break end
+if isCloth(v) then n += 1 end
+end
+end)
+return ok and n or 0
+end
+local function isSelf(t)
+local ok, res = pcall(function()
+for _, k in ipairs({ "name", "Name", "user", "username", "displayName" }) do
+local v = rawget(t, k)
+if v == LocalPlayer.Name or v == LocalPlayer.DisplayName then return true end
+end
+for _, k in ipairs({ "uid", "userId", "UserId", "id" }) do
+if tonumber(rawget(t, k)) == LocalPlayer.UserId then return true end
+end
+return false
+end)
+return ok and res
+end
+function V.find()
+local roots = {}
+if type(Refs.State) == "table" then roots[#roots + 1] = { Refs.State, "Refs.State" } end
+if type(Refs.Others) == "table" then
+pcall(function()
+for k, p in pairs(Refs.Others) do
+if type(p) == "table" and isSelf(p) then roots[#roots + 1] = { p, "Refs.Others." .. tostring(k) } end
+end
+end)
+end
+if type(Refs.Hud) == "table" then roots[#roots + 1] = { Refs.Hud, "Refs.Hud" } end
+if type(Refs.World) == "table" then roots[#roots + 1] = { Refs.World, "Refs.World" } end
+local best, bestSc, bestPath = nil, 0, nil
+local seen, nodes = {}, 0
+local function walk(t, path, depth, self)
+if seen[t] or nodes > 4000 then return end
+seen[t] = true
+nodes += 1
+pcall(function()
+for k, v in pairs(t) do
+if type(v) == "table" and not seen[v] then
+local kp = path .. "." .. tostring(k)
+if wearName(k) then
+local sc = scoreWear(v)
+if sc > 0 then
+if self then sc += 10 end
+if sc > bestSc then best, bestSc, bestPath = v, sc, kp end
+end
+end
+if depth < 3 then
+walk(v, kp, depth + 1, self or isSelf(v))
+end
+end
+end
+end)
+end
+for _, r in ipairs(roots) do walk(r[1], r[2], 0, r[2] ~= "Refs.Hud" and r[2] ~= "Refs.World" or isSelf(r[1])) end
+V.Found = best and { t = best, path = bestPath } or nil
+return V.Found
+end
+function V.search(q)
+q = string.lower((tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")))
+local out = {}
+if q == "" then return out end
+for id, it in pairs(ItemDB) do
+local name = tostring(rawget(it, "name") or "")
+local ln = string.lower(name)
+if string.find(ln, q, 1, true) then
+out[#out + 1] = { id = id, cloth = isCloth(id), exact = ln == q, label = ("%s [%d]"):format(name, id) }
+end
+end
+table.sort(out, function(a, b)
+if a.exact ~= b.exact then return a.exact end
+if a.cloth ~= b.cloth then return a.cloth end
+return a.id < b.id
+end)
+while #out > 30 do table.remove(out) end
+return out
+end
+local function applyOne(id)
+local f = V.Found or V.find()
+if not f then return false, "data baju karakter tidak ketemu (pakai baju asli dulu, lalu coba lagi)" end
+local want = slotOf(id)
+local key
+for k, cur in pairs(f.t) do
+if cur == id then return true end
+local orig = V.Applied[k] and V.Applied[k].old or cur
+if isCloth(orig) and want and slotOf(orig) == want then
+key = k
+break
+end
+end
+if key == nil then
+return false, ("pakai dulu item asli di bagian yang sama (%s)"):format(want or "bagian tidak dikenal")
+end
+if not V.Applied[key] then V.Applied[key] = { old = f.t[key] } end
+V.Applied[key].id = id
+rawset(f.t, key, id)
+return true
+end
+function V.apply()
+V.Found = nil
+local okN, failN, why = 0, 0, nil
+for _, id in ipairs(V.Wear) do
+local ok, e = applyOne(id)
+if ok then okN += 1 else
+failN += 1
+why = ("%s: %s"):format(itemName(id), tostring(e))
+end
+end
+V.Status = (#V.Wear == 0) and "Mati"
+or (("%d terpasang%s%s"):format(okN, failN > 0 and (", " .. failN .. " gagal") or "", why and (" | " .. why) or ""))
+if V.Found then V.Status = V.Status .. " | data: " .. tostring(V.Found.path) end
+return okN, failN, why
+end
+function V.clear()
+local f = V.Found
+if f then
+for k, a in pairs(V.Applied) do pcall(rawset, f.t, k, a.old) end
+end
+table.clear(V.Applied)
+table.clear(V.Wear)
+V.Status = "Mati"
+end
+task.spawn(function()
+local lastWorld = nil
+while alive() do
+task.wait(0.5)
+if #V.Wear > 0 and Refs.World then
+local w = Refs.World
+if w ~= lastWorld then
+lastWorld = w
+table.clear(V.Applied)
+task.wait(1)
+pcall(V.apply)
+else
+local f = V.Found
+if f then
+for k, a in pairs(V.Applied) do
+if rawget(f.t, k) ~= a.id then
+local cur = rawget(f.t, k)
+if cur ~= a.id then
+a.old = cur
+pcall(rawset, f.t, k, a.id)
+end
+end
+end
+else
+pcall(V.apply)
+end
+end
+end
+end
+end)
+end)() end
+safe(function()
+Box.VisItem:Paragraph({
+Title = "Cara pakai",
+Desc = "1) Pakai item ASLI apa saja di bagian yang sama (mis. sayap apa saja untuk visual sayap). "
+.. "2) Tulis nama item, pilih hasilnya, tekan Pakai. Hanya terlihat di layar kamu, pemain lain tetap melihat baju asli",
+})
+end)
+safe(function()
+UI.VisStatus = Box.VisItem:Paragraph({ Title = "Status visual", Desc = UI.Vis.Status })
+end)
+safe(function()
+Box.VisItem:Input({
+Title = "Cari nama item",
+Desc = "Contoh: wings, cape, halo, dragon",
+Value = "",
+Placeholder = "nama item...",
+Callback = function(t)
+local res = UI.Vis.search(t)
+local labels = {}
+for _, r in ipairs(res) do labels[#labels + 1] = r.label end
+UI.Vis.Pick = res[1] and res[1].id or nil
+if UI.VisPickDd then
+UI.later("visPick", function()
+UI.exec(function() UI.VisPickDd:Refresh(#labels > 0 and labels or { "(tidak ada item dengan nama itu)" }) end)
+if labels[1] then UI.exec(function() UI.VisPickDd:Select(labels[1]) end) end
+end)
+end
+end,
+})
+end)
+safe(function()
+UI.VisPickDd = Box.VisItem:Dropdown({
+Title = "Hasil cari",
+Desc = "Item baju ditaruh paling atas",
+Values = { "(tulis nama item dulu)" },
+Callback = function(v)
+if type(v) == "table" then v = v[1] end
+UI.Vis.Pick = tonumber(string.match(tostring(v), "%[(%d+)%]$"))
+end,
+})
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Pakai visual",
+Desc = "Item yang dipilih di 'Hasil cari'",
+Callback = function()
+local V = UI.Vis
+local id = V.Pick
+if not id then return notify("Visual", "Cari & pilih item dulu", 4) end
+if not table.find(V.Wear, id) then V.Wear[#V.Wear + 1] = id end
+local okN, failN, why = V.apply()
+if table.find(V.Wear, id) and why and string.find(why, itemName(id), 1, true) then
+table.remove(V.Wear, table.find(V.Wear, id))
+notify("Visual", "Gagal: " .. tostring(why), 6)
+else
+notify("Visual", itemName(id) .. " terpasang (hanya di layar kamu)", 4)
+end
+end,
+})
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Lepas semua visual",
+Desc = "Kembali ke baju asli",
+Callback = function()
+UI.Vis.clear()
+notify("Visual", "Visual dilepas", 3)
+end,
+})
+end)
+task.spawn(function()
+local shown
+while alive() do
+task.wait(1)
+local V = UI.Vis
+local names = {}
+for _, id in ipairs(V.Wear) do names[#names + 1] = itemName(id) end
+local txt = tostring(V.Status) .. (#names > 0 and ("\nDipakai: " .. table.concat(names, ", ")) or "")
+if txt ~= shown and UI.VisStatus then
+shown = txt
+pcall(function() UI.VisStatus:SetDesc(txt) end)
+end
+end
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Cek data visual",
+Desc = "Hanya membaca data game (tidak mengubah apa pun)",
+Callback = function()
+local ok, txt, copied = pcall(UI.visualReport)
+if not ok then
+notify("Visual", "Gagal: " .. tostring(txt), 5)
+return
+end
+pcall(function() UI.VisReport:SetDesc(string.sub(txt, 1, 1500)) end)
+notify("Visual", copied and "Hasil disalin ke clipboard" or "Hasil tampil di bawah / F9", 4)
+end,
+})
+end)
+safe(function()
+UI.VisReport = Box.VisItem:Paragraph({ Title = "Hasil", Desc = "-" })
+end)
 Box.SetChar = box(SetTab, "Karakter", true)
 Box.SetOpt = box(SetTab, "Opsi", true)
 local OptTab = Box.SetOpt
