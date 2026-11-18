@@ -1,0 +1,265 @@
+-- SkyP Title Detector (script terpisah dari SkyP)
+-- Menampilkan title / role semua pemain di server ini, dibaca dari modul Roles game
+-- (titlesOf, titleName, isModerator, isDeveloper, isUndercover). Hanya MEMBACA, tidak mengirim apa pun ke server.
+-- Pemain baru yang punya title / staff -> notifikasi.
+-- Catatan: efek nama buatan script (mis. nama rainbow) hanya ada di layar pemakainya, jadi TIDAK bisa dideteksi.
+
+local Players = game:GetService("Players")
+local StarterGui = game:GetService("StarterGui")
+local UIS = game:GetService("UserInputService")
+local LocalPlayer = Players.LocalPlayer
+
+local G = (getgenv and getgenv()) or _G
+if G.__SkyPTitle and G.__SkyPTitle.stop then pcall(G.__SkyPTitle.stop) end
+local App = { alive = true, conns = {} }
+G.__SkyPTitle = App
+
+local function notify(t, msg)
+    pcall(function() StarterGui:SetCore("SendNotification", { Title = t, Text = msg, Duration = 5 }) end)
+end
+local function strip(s) return (tostring(s or ""):gsub("`.", "")) end
+
+-- ---------- cari modul Roles game (nama modul diacak tiap update: dicari lewat isinya) ----------
+local Roles
+local function findRoles()
+    if Roles then return Roles end
+    if type(getloadedmodules) ~= "function" then return nil end
+    for _, m in ipairs(getloadedmodules()) do
+        local ok, v = pcall(require, m)
+        if ok and type(v) == "table" and type(rawget(v, "titlesOf")) == "function"
+            and type(rawget(v, "isModerator")) == "function" then
+            Roles = v
+            break
+        end
+    end
+    return Roles
+end
+
+local function call(name, ...)
+    local f = Roles and rawget(Roles, name)
+    if type(f) ~= "function" then return nil end
+    local ok, r = pcall(f, ...)
+    if ok then return r end
+    return nil
+end
+
+-- info 1 pemain: { name, titles = {...}, staff = "Developer" / "Moderator" / nil, under = bool }
+local function infoOf(p)
+    local uid = p.UserId
+    local out = { name = p.DisplayName ~= p.Name and (p.DisplayName .. " (@" .. p.Name .. ")") or p.Name, titles = {} }
+    if call("isDeveloper", uid) then out.staff = "Developer" elseif call("isModerator", uid) then out.staff = "Moderator" end
+    out.under = call("isUndercover", uid) == true
+    local list = call("titlesOf", uid)
+    if type(list) == "table" then
+        for _, key in ipairs(list) do
+            if type(key) == "string" then
+                local nm = call("titleName", key)
+                nm = (type(nm) == "string" and nm ~= "") and strip(nm) or key
+                out.titles[#out.titles + 1] = nm
+            end
+        end
+    end
+    out.special = out.staff ~= nil or out.under or #out.titles > 0
+    return out
+end
+
+-- ---------- tampilan ----------
+local gui = Instance.new("ScreenGui")
+gui.Name = "SkyPTitle"
+gui.ResetOnSpawn = false
+gui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetService("CoreGui") end)
+if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
+
+local main = Instance.new("Frame")
+main.Size = UDim2.fromOffset(300, 300)
+main.Position = UDim2.new(0, 20, 0.5, -150)
+main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
+main.BorderSizePixel = 0
+main.Active = true
+main.Parent = gui
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+local stroke = Instance.new("UIStroke", main)
+stroke.Color = Color3.fromRGB(60, 120, 255)
+stroke.Transparency = 0.4
+
+local function label(parent, props)
+    local l = Instance.new("TextLabel")
+    l.BackgroundTransparency = 1
+    l.Font = Enum.Font.GothamMedium
+    l.TextColor3 = Color3.fromRGB(230, 235, 245)
+    l.TextXAlignment = Enum.TextXAlignment.Left
+    l.TextSize = 12
+    for k, v in pairs(props) do l[k] = v end
+    l.Parent = parent
+    return l
+end
+local function button(parent, text, x, w)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.fromOffset(w, 24)
+    b.Position = UDim2.fromOffset(x, 34)
+    b.BackgroundColor3 = Color3.fromRGB(34, 40, 56)
+    b.TextColor3 = Color3.fromRGB(230, 235, 245)
+    b.Font = Enum.Font.GothamMedium
+    b.TextSize = 11
+    b.Text = text
+    b.AutoButtonColor = true
+    b.BorderSizePixel = 0
+    b.Parent = parent
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 6)
+    return b
+end
+
+local title = label(main, { Text = "SkyP Title Detector", Font = Enum.Font.GothamBold, TextSize = 14,
+    Position = UDim2.fromOffset(12, 6), Size = UDim2.new(1, -60, 0, 22) })
+local close = Instance.new("TextButton")
+close.Size = UDim2.fromOffset(24, 24)
+close.Position = UDim2.new(1, -32, 0, 6)
+close.BackgroundColor3 = Color3.fromRGB(34, 40, 56)
+close.Text = "×"
+close.TextColor3 = Color3.fromRGB(255, 120, 120)
+close.Font = Enum.Font.GothamBold
+close.TextSize = 16
+close.BorderSizePixel = 0
+close.Parent = main
+Instance.new("UICorner", close).CornerRadius = UDim.new(0, 6)
+
+local onlyBtn = button(main, "Hanya ber-title: NYALA", 12, 150)
+local copyBtn = button(main, "Salin daftar", 168, 70)
+local minBtn = button(main, "–", 244, 44)
+
+local info = label(main, { Text = "-", TextSize = 11, TextColor3 = Color3.fromRGB(150, 160, 180),
+    Position = UDim2.fromOffset(12, 62), Size = UDim2.new(1, -24, 0, 16) })
+
+local list = Instance.new("ScrollingFrame")
+list.Position = UDim2.fromOffset(8, 82)
+list.Size = UDim2.new(1, -16, 1, -90)
+list.BackgroundTransparency = 1
+list.BorderSizePixel = 0
+list.ScrollBarThickness = 3
+list.CanvasSize = UDim2.new()
+list.AutomaticCanvasSize = Enum.AutomaticSize.Y
+list.Parent = main
+local layout = Instance.new("UIListLayout", list)
+layout.Padding = UDim.new(0, 4)
+layout.SortOrder = Enum.SortOrder.LayoutOrder
+
+-- geser jendela
+do
+    local drag, start, pos
+    main.InputBegan:Connect(function(i)
+        if i.UserInputType == Enum.UserInputType.MouseButton1 or i.UserInputType == Enum.UserInputType.Touch then
+            drag, start, pos = true, i.Position, main.Position
+            i.Changed:Connect(function()
+                if i.UserInputState == Enum.UserInputState.End then drag = false end
+            end)
+        end
+    end)
+    table.insert(App.conns, UIS.InputChanged:Connect(function(i)
+        if drag and (i.UserInputType == Enum.UserInputType.MouseMovement or i.UserInputType == Enum.UserInputType.Touch) then
+            local d = i.Position - start
+            main.Position = UDim2.new(pos.X.Scale, pos.X.Offset + d.X, pos.Y.Scale, pos.Y.Offset + d.Y)
+        end
+    end))
+end
+
+local onlySpecial = true
+local minimized = false
+local lastText = ""
+local known = {} -- [userId] = true: sudah pernah diberi notifikasi
+
+local function refresh()
+    if not findRoles() then
+        info.Text = "Modul Roles game belum ketemu (tunggu game selesai dimuat)"
+        return
+    end
+    for _, c in ipairs(list:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    local rows, total, special = {}, 0, 0
+    for _, p in ipairs(Players:GetPlayers()) do
+        total += 1
+        local i = infoOf(p)
+        if i.special then special += 1 end
+        if i.special or not onlySpecial then rows[#rows + 1] = { p = p, i = i } end
+    end
+    table.sort(rows, function(a, b)
+        local sa = (a.i.staff and 2 or 0) + (#a.i.titles > 0 and 1 or 0)
+        local sb = (b.i.staff and 2 or 0) + (#b.i.titles > 0 and 1 or 0)
+        if sa ~= sb then return sa > sb end
+        return a.i.name < b.i.name
+    end)
+    local lines = {}
+    for n, r in ipairs(rows) do
+        local i = r.i
+        local tags = {}
+        if i.staff then tags[#tags + 1] = i.staff end
+        if i.under then tags[#tags + 1] = "undercover" end
+        for _, t in ipairs(i.titles) do tags[#tags + 1] = t end
+        local tagText = #tags > 0 and table.concat(tags, ", ") or "-"
+        lines[#lines + 1] = i.name .. " : " .. tagText
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, -4, 0, 36)
+        row.BackgroundColor3 = i.staff and Color3.fromRGB(70, 30, 40) or Color3.fromRGB(28, 34, 48)
+        row.BorderSizePixel = 0
+        row.LayoutOrder = n
+        row.Parent = list
+        Instance.new("UICorner", row).CornerRadius = UDim.new(0, 6)
+        label(row, { Text = i.name, Font = Enum.Font.GothamBold, Position = UDim2.fromOffset(8, 2),
+            Size = UDim2.new(1, -16, 0, 16), TextTruncate = Enum.TextTruncate.AtEnd })
+        label(row, { Text = tagText, TextSize = 11, Position = UDim2.fromOffset(8, 18), Size = UDim2.new(1, -16, 0, 14),
+            TextColor3 = i.staff and Color3.fromRGB(255, 140, 150) or Color3.fromRGB(120, 200, 255),
+            TextTruncate = Enum.TextTruncate.AtEnd })
+        -- notifikasi pemain ber-title / staff yang baru terlihat
+        if i.special and not known[r.p.UserId] and r.p ~= LocalPlayer then
+            known[r.p.UserId] = true
+            if App.started then notify(i.staff and "STAFF terdeteksi" or "Pemain ber-title", i.name .. " : " .. tagText) end
+        end
+    end
+    info.Text = ("Server: %d pemain | ber-title / staff: %d | tampil: %d"):format(total, special, #rows)
+    lastText = table.concat(lines, "\n")
+    App.started = true
+end
+
+onlyBtn.MouseButton1Click:Connect(function()
+    onlySpecial = not onlySpecial
+    onlyBtn.Text = "Hanya ber-title: " .. (onlySpecial and "NYALA" or "MATI")
+    refresh()
+end)
+copyBtn.MouseButton1Click:Connect(function()
+    local clip = setclipboard or toclipboard
+    if type(clip) == "function" and pcall(clip, lastText) then
+        notify("Title Detector", "Daftar disalin ke clipboard")
+    else
+        notify("Title Detector", "Executor tidak bisa menyalin")
+    end
+end)
+minBtn.MouseButton1Click:Connect(function()
+    minimized = not minimized
+    list.Visible, info.Visible = not minimized, not minimized
+    main.Size = minimized and UDim2.fromOffset(300, 64) or UDim2.fromOffset(300, 300)
+    minBtn.Text = minimized and "+" or "–"
+end)
+
+function App.stop()
+    App.alive = false
+    for _, c in ipairs(App.conns) do pcall(function() c:Disconnect() end) end
+    if gui.Parent then gui:Destroy() end
+end
+close.MouseButton1Click:Connect(App.stop)
+
+table.insert(App.conns, Players.PlayerAdded:Connect(function()
+    task.wait(2) -- tunggu data title pemain baru masuk
+    if App.alive then pcall(refresh) end
+end))
+table.insert(App.conns, Players.PlayerRemoving:Connect(function()
+    task.defer(function() if App.alive then pcall(refresh) end end)
+end))
+
+task.spawn(function()
+    while App.alive do
+        pcall(refresh)
+        task.wait(10)
+    end
+end)
+notify("Title Detector", "Jalan. Tekan × untuk menutup")
