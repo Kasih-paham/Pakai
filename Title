@@ -1,7 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v7: warna nama = huruf diwarnai langsung. v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) dan Content Creator sengaja tidak disediakan.
@@ -46,11 +46,22 @@ local function findRoles()
 end
 
 local R -- modul Roles
-local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Calls = {}, Orig = {} }
+local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Color = nil, Calls = {}, Orig = {} }
 App.F = F
 local TITLES = {}                 -- { { key, name } }
 local GUILDS = { 0, 4, 3, 2 }     -- 0 = tidak ada / GL / GC / GE
 local GUILD_TXT = { [4] = "(GL)", [3] = "(GC)", [2] = "(GE)" }
+-- v7: warna nama = huruf nama diwarnai ulang langsung (hanya di layar sendiri).
+-- (nameCode ternyata kode warna untuk data gembok world, bukan warna nametag)
+local COLORS = {
+    { nil, "Asli" }, { Color3.fromRGB(255, 255, 255), "Putih" }, { Color3.fromRGB(255, 200, 40), "Emas" },
+    { Color3.fromRGB(255, 240, 90), "Kuning" }, { Color3.fromRGB(255, 150, 40), "Oranye" },
+    { Color3.fromRGB(255, 70, 70), "Merah" }, { Color3.fromRGB(255, 110, 200), "Pink" },
+    { Color3.fromRGB(255, 175, 225), "Pink muda" }, { Color3.fromRGB(185, 115, 255), "Ungu" },
+    { Color3.fromRGB(125, 205, 255), "Biru muda" }, { Color3.fromRGB(70, 135, 255), "Biru" },
+    { Color3.fromRGB(60, 235, 215), "Aqua" }, { Color3.fromRGB(0, 255, 255), "Cyan" },
+    { Color3.fromRGB(160, 255, 130), "Hijau muda" }, { Color3.fromRGB(40, 40, 40), "Hitam" },
+}
 
 -- argumen menunjuk karakter sendiri? (UserId / nama / Player / karakter / data pemain {uid, nama})
 local myId, myName = LocalPlayer.UserId, LocalPlayer.Name
@@ -229,8 +240,8 @@ local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetServi
 if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 362)
-main.Position = UDim2.new(0, 20, 0.5, -181)
+main.Size = UDim2.fromOffset(280, 394)
+main.Position = UDim2.new(0, 20, 0.5, -197)
 main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
 main.BorderSizePixel = 0
 main.Active = true
@@ -288,17 +299,20 @@ local bGuild = btn("", 162)
 local bCopy = btn("Salin pilihan", 194)
 local bDiag = btn("Salin diagnosa + struktur nama", 226)
 local bBadge = btn("", 258)
+local bColor = btn("", 290)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
-    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 292), Size = UDim2.new(1, -24, 0, 66) })
+    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 324), Size = UDim2.new(1, -24, 0, 66) })
 
-local titleIdx, guildIdx = 0, 1
+local titleIdx, guildIdx, colorIdx = 0, 1, 1
 local function titleName()
     local t = TITLES[titleIdx]
     return t and (t.name .. " [" .. t.key .. "]") or "Tidak ada"
 end
 local function paint()
     bOn.Text = "Title visual: " .. (F.On and "NYALA" or "MATI")
-    bBadge.Text = "Badge buatan (kiri nama): " .. (F.Badge and "NYALA" or "MATI")
+    bBadge.Text = "Badge + wrench title: " .. (F.Badge and "NYALA" or "MATI")
+    bColor.Text = "Warna nama: " .. COLORS[colorIdx][2] .. "  ›"
+    bColor.TextColor3 = F.Color or Color3.fromRGB(230, 235, 245)
     bLegend.Text = "of Legend: " .. (F.Legend and "NYALA" or "MATI")
     bDr.Text = "Dr.: " .. (F.Dr and "NYALA" or "MATI")
     bTitle.Text = "Title: " .. titleName() .. "  ›"
@@ -307,6 +321,11 @@ end
 
 bOn.MouseButton1Click:Connect(function() F.On = not F.On paint() end)
 bBadge.MouseButton1Click:Connect(function() F.Badge = not F.Badge paint() end)
+bColor.MouseButton1Click:Connect(function()
+    colorIdx = colorIdx % #COLORS + 1
+    F.Color = COLORS[colorIdx][1]
+    paint()
+end)
 bLegend.MouseButton1Click:Connect(function() F.Legend = not F.Legend paint() end)
 bDr.MouseButton1Click:Connect(function() F.Dr = not F.Dr paint() end)
 bTitle.MouseButton1Click:Connect(function()
@@ -323,9 +342,11 @@ bCopy.MouseButton1Click:Connect(function()
     local calls = {}
     for name, n in pairs(F.Calls) do calls[#calls + 1] = name .. "=" .. n end
     table.sort(calls)
-    local txt = ("-- Pilihan Title Visual (tempel ke developer)\nTITLE_FX = { legend = %s, dr = %s, title = %s, guild = %s }\n-- dipanggil game: %s"):format(
+    local txt = ("-- Pilihan Title Visual (tempel ke developer)\nTITLE_FX = { legend = %s, dr = %s, title = %s, guild = %s, color = %s, badge = %s }\n-- dipanggil game: %s"):format(
         tostring(F.Legend), tostring(F.Dr), F.Title and ('"' .. F.Title .. '"') or "nil",
-        F.Guild and tostring(F.Guild) or "nil", table.concat(calls, ", "))
+        F.Guild and tostring(F.Guild) or "nil", F.Color and ("Color3.fromRGB(%d, %d, %d)"):format(math.floor(F.Color.R * 255 + 0.5),
+            math.floor(F.Color.G * 255 + 0.5), math.floor(F.Color.B * 255 + 0.5)) or "nil", tostring(F.Badge),
+        table.concat(calls, ", "))
     local clip = setclipboard or toclipboard
     if type(clip) == "function" and pcall(clip, txt) then
         notify("Title Visual", "Pilihan disalin ke clipboard")
@@ -455,9 +476,9 @@ dumpTag = function(out)
 end
 
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v5: diagnosa",
-        ("pilihan: legend=%s dr=%s title=%s guild=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
-            tostring(F.Title), tostring(F.Guild), tostring(myId), myName) }
+    local out = { "-- SkyP Title Visual v7: diagnosa",
+        ("pilihan: legend=%s dr=%s title=%s guild=%s color=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
+            tostring(F.Title), tostring(F.Guild), COLORS[colorIdx][2], tostring(myId), myName) }
     local names = {}
     for name in pairs(F.Calls) do names[#names + 1] = name end
     table.sort(names)
@@ -501,16 +522,77 @@ end
 -- karena game tidak menggambar badge walau badgeOf sudah menjawab gambar title.
 F.Badge = true
 local badgeObj
+F.Fixed = {}   -- [slot bendera] = potongan asli (dikembalikan saat title dimatikan)
+F.Wrench = {}  -- [kotak wrench] = true (dimunculkan)
 local function badgeClear()
     if badgeObj then pcall(function() badgeObj:Destroy() end) end
     badgeObj = nil
 end
+local function fixRestore()
+    for o, r in pairs(F.Fixed) do
+        pcall(function() o.ImageRectOffset = r.off o.ImageRectSize = r.size end)
+    end
+    table.clear(F.Fixed)
+    for fr in pairs(F.Wrench) do pcall(function() fr.Visible = false end) end
+    table.clear(F.Wrench)
+end
+-- wrench title (Super Sponsor): kotaknya sudah dibuat game di kanan nama, hanya disembunyikan
+local function wrenchTick(holder)
+    local w = tbl("TITLE_WRENCHES")
+    local e = F.Title and w and w[F.Title]
+    local img = type(e) == "table" and rawget(e, "image") or nil
+    for _, fr in ipairs(holder:GetChildren()) do
+        local base = fr:IsA("Frame") and fr:FindFirstChild("Base")
+        if base and base:IsA("ImageLabel") then
+            if img and base.Image == img then
+                if not fr.Visible then fr.Visible = true end
+                F.Wrench[fr] = true
+            elseif F.Wrench[fr] then
+                fr.Visible = false
+                F.Wrench[fr] = nil
+            end
+        end
+    end
+end
+-- v7: warna huruf nama. Warna asli tiap huruf dicatat; hanya huruf berwarna sama dengan huruf pertama
+-- (nama + title) yang diwarnai, jadi tag guild "(GL)" tetap biru.
+F.NameCol = { bm = nil, orig = {} }
+local function colorRestore()
+    local st = F.NameCol
+    for l, c in pairs(st.orig) do pcall(function() if l.Parent then l.ImageColor3 = c end end) end
+    st.bm, st.orig = nil, {}
+end
+local function colorTick(bm)
+    local st = F.NameCol
+    if st.bm ~= bm then colorRestore() st.bm = bm end
+    local want = F.On and F.Color or nil
+    -- warna utama = warna asli yang paling banyak dipakai huruf (bayangan hitam / tag guild tidak ikut)
+    local kids, count, base, best = bm:GetChildren(), {}, nil, 0
+    for _, l in ipairs(kids) do
+        if l:IsA("ImageLabel") then
+            if st.orig[l] == nil then st.orig[l] = l.ImageColor3 end
+            local c = st.orig[l]
+            if c.R + c.G + c.B > 0.45 then
+                local k = math.floor(c.R * 255 + 0.5) * 65536 + math.floor(c.G * 255 + 0.5) * 256 + math.floor(c.B * 255 + 0.5)
+                count[k] = (count[k] or 0) + 1
+                if count[k] > best then best, base = count[k], c end
+            end
+        end
+    end
+    for _, l in ipairs(kids) do
+        local o = l:IsA("ImageLabel") and st.orig[l]
+        if o then
+            local target = (want and base and o == base) and want or o
+            if l.ImageColor3 ~= target then l.ImageColor3 = target end
+        end
+    end
+    for l in pairs(st.orig) do
+        if l.Parent ~= bm then st.orig[l] = nil end -- huruf lama (nama digambar ulang)
+    end
+end
+
 local function badgeTick()
-    if not (F.On and F.Badge and F.Title and R) then badgeClear() return end
-    local b = tbl("TITLE_BADGES")
-    local e = b and b[F.Title]
-    local img = type(e) == "table" and rawget(e, "image") or e
-    if type(img) ~= "string" then badgeClear() return end -- Legend: bola emas digambar game sendiri
+    if not (F.On and R and (F.Title or F.Color or next(F.NameCol.orig))) then badgeClear() fixRestore() colorRestore() return end
     -- nametag yang sudah ketemu dipakai terus; dicari ulang paling sering tiap 1 detik (hemat)
     local bm = F.TagBm
     if not (bm and bm.Parent and bm:IsDescendantOf(game) and shown(bm)) then
@@ -522,7 +604,28 @@ local function badgeTick()
         F.TagBm = bm
     end
     if not bm then return end
+    pcall(colorTick, bm)
+    if not (F.Badge and F.Title) then badgeClear() fixRestore() return end
+    local b = tbl("TITLE_BADGES")
+    local e = b and b[F.Title]
+    local img = type(e) == "table" and rawget(e, "image") or e
     local holder = bm.Parent
+    pcall(wrenchTick, holder)
+    if type(img) ~= "string" then badgeClear() return end -- Legend: bola emas digambar game sendiri
+    -- v6: game sudah memasang gambar badge di slot bendera, tapi potongannya masih potongan bendera (16x16).
+    -- Potongan dibetulkan -> badge asli game tampil di tempat aslinya.
+    local cell0 = type(e) == "table" and tonumber(rawget(e, "cell")) or nil
+    for _, o in ipairs(holder:GetChildren()) do
+        if (o:IsA("ImageLabel") or o:IsA("ImageButton")) and o.Name ~= "SkyPBadge" and o.Image == img then
+            if not F.Fixed[o] then F.Fixed[o] = { off = o.ImageRectOffset, size = o.ImageRectSize } end
+            local want = cell0 and Vector2.new(cell0, cell0) or Vector2.zero
+            if o.ImageRectOffset ~= Vector2.zero then o.ImageRectOffset = Vector2.zero end
+            if o.ImageRectSize ~= want then o.ImageRectSize = want end
+            if o.ScaleType ~= Enum.ScaleType.Fit then o.ScaleType = Enum.ScaleType.Fit end
+            badgeClear()
+            return
+        end
+    end
     if not badgeObj or badgeObj.Parent ~= holder then
         badgeClear()
         badgeObj = Instance.new("ImageLabel")
@@ -561,6 +664,8 @@ function App.stop()
     App.alive = false
     unhook() -- fungsi game dikembalikan seperti semula
     badgeClear()
+    fixRestore()
+    colorRestore()
     for _, c in ipairs(App.conns) do pcall(function() c:Disconnect() end) end
     if gui.Parent then gui:Destroy() end
 end
