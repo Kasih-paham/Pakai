@@ -1,7 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v9: hijau pemilik world dihilangkan (nameCode). v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) dan Content Creator sengaja tidak disediakan.
@@ -46,7 +46,7 @@ local function findRoles()
 end
 
 local R -- modul Roles
-local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Color = nil, Calls = {}, Orig = {} }
+local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Color = nil, NoOwner = true, Calls = {}, Orig = {} }
 App.F = F
 local TITLES = {}                 -- { { key, name } }
 local GUILDS = { 0, 4, 3, 2 }     -- 0 = tidak ada / GL / GC / GE
@@ -217,7 +217,16 @@ local function hook()
         if ok and c ~= nil then return true, c end
     end)
     -- hanya dicatat (bentuk jawabannya belum diketahui)
-    for _, nm in ipairs({ "titleColor", "tagText", "stillTag", "nameKey", "nameCode", "nameOf", "lineName" }) do
+    -- v9: nameCode = kode warna nama (dipakai lineName: "`wDon``"). Di world sendiri game memberi "2" (hijau pemilik),
+    -- yang menutupi warna / efek title. Diganti warna yang didapat tanpa status pemilik (pemain lain: "w" putih).
+    wrap("nameCode", function(me, n, r, a1)
+        if not (me and F.NoOwner and r == "2") then return end
+        local orig = F.Orig.nameCode
+        local ok, c = pcall(orig, a1)
+        if ok and type(c) == "string" and c ~= "2" then return true, c end
+        return true, "w"
+    end)
+    for _, nm in ipairs({ "titleColor", "tagText", "stillTag", "nameKey", "nameOf", "lineName" }) do
         wrap(nm, nil)
     end
 
@@ -240,8 +249,8 @@ local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetServi
 if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 362)
-main.Position = UDim2.new(0, 20, 0.5, -181)
+main.Size = UDim2.fromOffset(280, 394)
+main.Position = UDim2.new(0, 20, 0.5, -197)
 main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
 main.BorderSizePixel = 0
 main.Active = true
@@ -299,8 +308,9 @@ local bGuild = btn("", 162)
 local bCopy = btn("Salin pilihan", 194)
 local bDiag = btn("Salin diagnosa + struktur nama", 226)
 local bBadge = btn("", 258)
+local bOwner = btn("", 290)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
-    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 292), Size = UDim2.new(1, -24, 0, 66) })
+    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 324), Size = UDim2.new(1, -24, 0, 66) })
 
 local titleIdx, guildIdx, colorIdx = 0, 1, 1
 local function titleName()
@@ -310,6 +320,7 @@ end
 local function paint()
     bOn.Text = "Title visual: " .. (F.On and "NYALA" or "MATI")
     bBadge.Text = "Badge + wrench title: " .. (F.Badge and "NYALA" or "MATI")
+    bOwner.Text = "Hijau pemilik world: " .. (F.NoOwner and "DIHILANGKAN" or "ASLI")
     bLegend.Text = "of Legend: " .. (F.Legend and "NYALA" or "MATI")
     bDr.Text = "Dr.: " .. (F.Dr and "NYALA" or "MATI")
     bTitle.Text = "Title: " .. titleName() .. "  ›"
@@ -318,6 +329,7 @@ end
 
 bOn.MouseButton1Click:Connect(function() F.On = not F.On paint() end)
 bBadge.MouseButton1Click:Connect(function() F.Badge = not F.Badge paint() end)
+bOwner.MouseButton1Click:Connect(function() F.NoOwner = not F.NoOwner paint() end)
 bLegend.MouseButton1Click:Connect(function() F.Legend = not F.Legend paint() end)
 bDr.MouseButton1Click:Connect(function() F.Dr = not F.Dr paint() end)
 bTitle.MouseButton1Click:Connect(function()
@@ -334,10 +346,10 @@ bCopy.MouseButton1Click:Connect(function()
     local calls = {}
     for name, n in pairs(F.Calls) do calls[#calls + 1] = name .. "=" .. n end
     table.sort(calls)
-    local txt = ("-- Pilihan Title Visual (tempel ke developer)\nTITLE_FX = { legend = %s, dr = %s, title = %s, guild = %s, color = %s, badge = %s }\n-- dipanggil game: %s"):format(
+    local txt = ("-- Pilihan Title Visual (tempel ke developer)\nTITLE_FX = { legend = %s, dr = %s, title = %s, guild = %s, color = %s, badge = %s, noOwner = %s }\n-- dipanggil game: %s"):format(
         tostring(F.Legend), tostring(F.Dr), F.Title and ('"' .. F.Title .. '"') or "nil",
         F.Guild and tostring(F.Guild) or "nil", F.Color and ("Color3.fromRGB(%d, %d, %d)"):format(math.floor(F.Color.R * 255 + 0.5),
-            math.floor(F.Color.G * 255 + 0.5), math.floor(F.Color.B * 255 + 0.5)) or "nil", tostring(F.Badge),
+            math.floor(F.Color.G * 255 + 0.5), math.floor(F.Color.B * 255 + 0.5)) or "nil", tostring(F.Badge), tostring(F.NoOwner),
         table.concat(calls, ", "))
     local clip = setclipboard or toclipboard
     if type(clip) == "function" and pcall(clip, txt) then
@@ -468,7 +480,7 @@ dumpTag = function(out)
 end
 
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v8: diagnosa",
+    local out = { "-- SkyP Title Visual v9: diagnosa",
         ("pilihan: legend=%s dr=%s title=%s guild=%s color=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
             tostring(F.Title), tostring(F.Guild), COLORS[colorIdx][2], tostring(myId), myName) }
     local names = {}
