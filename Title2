@@ -1,7 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v11: tombol decompile kode game nama. v10: semua title + tombol katalog. v9: hijau pemilik world dihilangkan (nameCode). v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v12: kode efek {title} lewat nameCode + decompile BitmapText. v11: tombol decompile kode game nama. v10: semua title + tombol katalog. v9: hijau pemilik world dihilangkan (nameCode). v8: tombol warna dihapus (animasi huruf title dibiarkan dari game). v7: v6: slot badge game dibetulkan, wrench dimunculkan, warna nama (nameCode). v5: badge buatan sendiri + cari nametag di GameGui. v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) sengaja tidak disediakan (bisa membuka menu staff di game).
@@ -46,7 +46,7 @@ local function findRoles()
 end
 
 local R -- modul Roles
-local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Color = nil, NoOwner = true, Calls = {}, Orig = {} }
+local F = { On = true, Legend = false, Dr = false, Title = nil, Guild = nil, Color = nil, NoOwner = true, FxCode = true, Calls = {}, Orig = {} }
 App.F = F
 local TITLES = {}                 -- { { key, name } }
 local GUILDS = { 0, 4, 3, 2 }     -- 0 = tidak ada / GL / GC / GE
@@ -85,6 +85,7 @@ end
 -- ---------- catatan diagnosa: argumen & jawaban asli tiap fungsi (maks 8 pola berbeda per fungsi) ----------
 F.Log = {}      -- [nama] = { pola, ... }
 F.SrcFull = {}  -- [nama] = jalur lengkap script game yang memanggil (untuk decompile)
+F.SrcFn = {}    -- [nama] = fungsi game yang memanggil (script-nya dicari lewat getfenv)
 F.LogSeen = {}  -- [nama] = { [pola] = true }
 local function short(v, deep)
     local t = typeof(v)
@@ -144,6 +145,10 @@ local function wrap(name, rule)
         if not lg or #lg < 8 then
             local okS, src = pcall(debug.info, 2, "s") -- script yang memanggil
             if okS and type(src) == "string" and not F.SrcFull[name] then F.SrcFull[name] = src end
+            if not F.SrcFn[name] then
+                local okF, fn = pcall(debug.info, 2, "f")
+                if okF and type(fn) == "function" then F.SrcFn[name] = fn end
+            end
             pcall(logCall, name, me, res[1], okS and src or nil, ...)
         end
         if F.On and rule then
@@ -222,7 +227,11 @@ local function hook()
     -- v9: nameCode = kode warna nama (dipakai lineName: "`wDon``"). Di world sendiri game memberi "2" (hijau pemilik),
     -- yang menutupi warna / efek title. Diganti warna yang didapat tanpa status pemilik (pemain lain: "w" putih).
     wrap("nameCode", function(me, n, r, a1)
-        if not (me and F.NoOwner and r == "2") then return end
+        if not me then return end
+        -- v12: kode efek title BitmapText. Roles.lineName membungkus nama ber-title jadi "`{title}nama`}".
+        -- Kalau penggambar nama sendiri memakai "`" .. nameCode .. nama .. "``", kode "{title}" ikut memicu efeknya.
+        if F.FxCode and F.Title and F.Title ~= "legend" then return true, "{" .. F.Title .. "}" end
+        if not (F.NoOwner and r == "2") then return end
         local orig = F.Orig.nameCode
         local ok, c = pcall(orig, a1)
         if ok and type(c) == "string" and c ~= "2" then return true, c end
@@ -251,8 +260,8 @@ local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetServi
 if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 458)
-main.Position = UDim2.new(0, 20, 0.5, -229)
+main.Size = UDim2.fromOffset(280, 490)
+main.Position = UDim2.new(0, 20, 0.5, -245)
 main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
 main.BorderSizePixel = 0
 main.Active = true
@@ -313,8 +322,9 @@ local bBadge = btn("", 258)
 local bOwner = btn("", 290)
 local bCat = btn("Katalog semua title + efek (salin)", 322)
 local bCode = btn("Salin kode game nama (decompile)", 354)
+local bFx = btn("", 386)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
-    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 388), Size = UDim2.new(1, -24, 0, 66) })
+    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 420), Size = UDim2.new(1, -24, 0, 66) })
 
 local titleIdx, guildIdx, colorIdx = 0, 1, 1
 local function titleName()
@@ -325,6 +335,7 @@ local function paint()
     bOn.Text = "Title visual: " .. (F.On and "NYALA" or "MATI")
     bBadge.Text = "Badge + wrench title: " .. (F.Badge and "NYALA" or "MATI")
     bOwner.Text = "Hijau pemilik world: " .. (F.NoOwner and "DIHILANGKAN" or "ASLI")
+    bFx.Text = "Efek title (kode {title}): " .. (F.FxCode and "NYALA" or "MATI")
     bLegend.Text = "of Legend: " .. (F.Legend and "NYALA" or "MATI")
     bDr.Text = "Dr.: " .. (F.Dr and "NYALA" or "MATI")
     bTitle.Text = "Title: " .. titleName() .. "  ›"
@@ -334,6 +345,7 @@ end
 bOn.MouseButton1Click:Connect(function() F.On = not F.On paint() end)
 bBadge.MouseButton1Click:Connect(function() F.Badge = not F.Badge paint() end)
 bOwner.MouseButton1Click:Connect(function() F.NoOwner = not F.NoOwner paint() end)
+bFx.MouseButton1Click:Connect(function() F.FxCode = not F.FxCode paint() end)
 bLegend.MouseButton1Click:Connect(function() F.Legend = not F.Legend paint() end)
 bDr.MouseButton1Click:Connect(function() F.Dr = not F.Dr paint() end)
 bTitle.MouseButton1Click:Connect(function()
@@ -484,7 +496,7 @@ dumpTag = function(out)
 end
 
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v11: diagnosa",
+    local out = { "-- SkyP Title Visual v12: diagnosa",
         ("pilihan: legend=%s dr=%s title=%s guild=%s color=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
             tostring(F.Title), tostring(F.Guild), COLORS[colorIdx][2], tostring(myId), myName) }
     local names = {}
@@ -612,10 +624,27 @@ local function findRolesInst()
     end
     return nil
 end
-local function findByPath(path)
+local function findByPath(path, fn)
     for _, sc in ipairs(allScripts()) do
         local ok, full = pcall(function() return sc:GetFullName() end)
         if ok and (full == path or "=" .. full == path or "@" .. full == path) then return sc end
+    end
+    -- v12: lewat lingkungan fungsi pemanggil (getfenv(fn).script)
+    if type(fn) == "function" and type(getfenv) == "function" then
+        local ok, sc = pcall(function() return getfenv(fn).script end)
+        if ok and typeof(sc) == "Instance" then return sc end
+    end
+    -- v12: cari nama script (bagian terakhir jalur) di seluruh game + instance nil
+    local last = string.match(path, "([^%.]+)$") or path
+    local pools = { game:GetDescendants() }
+    if type(getnilinstances) == "function" then
+        local ok, arr = pcall(getnilinstances)
+        if ok and type(arr) == "table" then pools[#pools + 1] = arr end
+    end
+    for _, pool in ipairs(pools) do
+        for _, o in ipairs(pool) do
+            if o.Name == last and (o:IsA("LocalScript") or o:IsA("ModuleScript") or o:IsA("Script")) then return o end
+        end
     end
     return nil
 end
@@ -645,23 +674,30 @@ local function windows(txt, keys, n, cap)
     return table.concat(out, "\n")
 end
 local function gameCode()
-    local out = { "-- SkyP Title Visual v11: KODE GAME (decompile) untuk warna & efek title" }
+    local out = { "-- SkyP Title Visual v12: KODE GAME (decompile) untuk warna & efek title" }
     -- 1) modul Roles utuh (fungsi titleOf, tagColor, nameCode, tagText, ...)
     local ri = findRolesInst()
     if ri then
         local txt, err = decompileText(ri)
         out[#out + 1] = "== Modul Roles: " .. ri:GetFullName() .. " =="
         out[#out + 1] = txt and (#txt > 60000 and (string.sub(txt, 1, 60000) .. "\n... (dipotong)") or txt) or ("gagal: " .. tostring(err))
+        -- v12: modul BitmapText (yang menggambar kode warna "`w" dan kode efek "`{title}")
+        local bt = ri.Parent and ri.Parent:FindFirstChild("BitmapText")
+        if bt then
+            local t2, e2 = decompileText(bt)
+            out[#out + 1] = "== Modul BitmapText: " .. bt:GetFullName() .. " =="
+            out[#out + 1] = t2 and (#t2 > 80000 and (string.sub(t2, 1, 80000) .. "\n... (dipotong)") or t2) or ("gagal: " .. tostring(e2))
+        end
     else
         out[#out + 1] = "== Modul Roles: instance tidak ketemu =="
     end
     -- 2) script penggambar nama (yang memanggil tagText / legendOn / titleOf)
     local done = {}
-    for _, nm in ipairs({ "tagText", "legendOn", "titleOf", "badgeOf" }) do
+    for _, nm in ipairs({ "tagText", "nameCode", "badgeOf", "legendOn", "titleOf" }) do
         local path = F.SrcFull[nm]
         if path and not done[path] then
             done[path] = true
-            local inst = findByPath(path)
+            local inst = findByPath(path, F.SrcFn[nm])
             out[#out + 1] = ("== Script pemanggil %s: %s =="):format(nm, path)
             if inst then
                 local txt, err = decompileText(inst)
