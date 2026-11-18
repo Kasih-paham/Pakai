@@ -1,7 +1,7 @@
 local SKYP = ...
 if type(SKYP) ~= "table" then
 SKYP = {
-version = "v2.12.0",
+version = "v2.12.1",
 shared = {},
 onStop = {},
 isAlive = function() return true end,
@@ -50,7 +50,7 @@ return G.__Alfian == Session and SKYP.isAlive()
 end
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
 Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.12.0" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.12.1" end
 do
 local Lic = Session.Lic
 local HS = game:GetService("HttpService")
@@ -11461,6 +11461,8 @@ add("-- Hud fungsi baju (jumlah parameter): " .. table.concat(parts, ", "))
 end
 if UI.Vis then
 add("-- Visual: " .. tostring(UI.Vis.Status):gsub("\n", " | "))
+add("-- Contoh paket: " .. (UI.Vis.Tpl and "ada" or "belum"))
+for _, l in ipairs(UI.Vis.Log or {}) do add("   " .. l) end
 end
 local txt = table.concat(L, "\n")
 if #txt > 9000 then txt = string.sub(txt, 1, 9000) .. "\n...(dipotong)" end
@@ -11469,166 +11471,207 @@ local copied = type(clip) == "function" and pcall(clip, txt)
 warn("[SkyP] " .. txt)
 return txt, copied
 end
-UI.Vis = { Wear = {}, Status = "Mati", Applied = {}, Pick = nil, Found = nil }
-Config.add("Visual", UI.Vis, { "Wear" })
+UI.Vis = { Wear = {}, Status = "Mati", Pick = nil, Tpl = nil, TplS = "", Bag = {}, Log = {}, Count = 1 }
+Config.add("Visual", UI.Vis, { "Wear", "TplS", "Count" })
 do (function()
 local V = UI.Vis
-local SLOTKEYS = { "slot", "part", "bodyPart", "bodypart", "clothType", "clothSlot", "wearSlot", "layer", "category", "sub", "subtype", "type" }
-local WEARPAT = { "cloth", "wear", "equip", "outfit", "look", "avatar", "skin" }
-local function isCloth(id)
-local it = type(id) == "number" and ItemDB[id] or nil
-if type(it) ~= "table" then return false end
-local k = string.lower(tostring(rawget(it, "kind") or ""))
-return string.find(k, "cloth", 1, true) ~= nil or string.find(k, "wear", 1, true) ~= nil
-end
-local function slotOf(id)
-local it = ItemDB[id]
-if type(it) ~= "table" then return nil end
-for _, k in ipairs(SLOTKEYS) do
-local v = rawget(it, k)
-if (type(v) == "number" or type(v) == "string") and tostring(v) ~= "" then return k .. "=" .. tostring(v) end
-end
-return nil
-end
-local function wearName(k)
-k = string.lower(tostring(k))
-for _, p in ipairs(WEARPAT) do
-if string.find(k, p, 1, true) then return true end
-end
-return false
-end
-local function scoreWear(t)
-local n = 0
-local ok = pcall(function()
-local c = 0
-for _, v in pairs(t) do
-c += 1
-if c > 40 then break end
-if isCloth(v) then n += 1 end
-end
-end)
-return ok and n or 0
-end
-local function isSelf(t)
-local ok, res = pcall(function()
-for _, k in ipairs({ "name", "Name", "user", "username", "displayName" }) do
-local v = rawget(t, k)
-if v == LocalPlayer.Name or v == LocalPlayer.DisplayName then return true end
-end
-for _, k in ipairs({ "uid", "userId", "UserId", "id" }) do
-if tonumber(rawget(t, k)) == LocalPlayer.UserId then return true end
-end
-return false
-end)
-return ok and res
-end
-local function slotSet()
-if V.Slots then return V.Slots end
-local t = {}
-for _, it in pairs(ItemDB) do
-local sl = rawget(it, "slot")
-if type(sl) == "string" then t[sl] = true end
-end
-V.Slots = t
-return t
-end
+V.Bag = {}
 local function itemSlot(id)
 local it = ItemDB[id]
 local sl = type(it) == "table" and rawget(it, "slot") or nil
 return type(sl) == "string" and sl or nil
 end
-local function hasSlotKeys(t)
-local S = slotSet()
-local ok, res = pcall(function()
-for k in pairs(t) do
-if S[k] then return true end
+local function isClothId(v) return type(v) == "number" and itemSlot(v) ~= nil end
+local function clean(v, depth)
+local tv = type(v)
+if tv == "number" or tv == "string" or tv == "boolean" then return v end
+if tv ~= "table" or depth > 4 then return nil end
+local o = {}
+for k, x in pairs(v) do
+if type(k) == "number" or type(k) == "string" then
+local c = clean(x, depth + 1)
+if c ~= nil then o[k] = c end
 end
-return false
-end)
-return ok and res
 end
-local function selfKey(t)
-local ok, res = pcall(function()
-for k, v in pairs(t) do
-if k == LocalPlayer or k == LocalPlayer.UserId or k == LocalPlayer.Name
-or tostring(k) == tostring(LocalPlayer.UserId) then return k end
-if type(v) == "table" and isSelf(v) then return k end
+return o
 end
-return nil
-end)
-return ok and res or nil
+local HS = game:GetService("HttpService")
+local function ser(v)
+if type(v) ~= "table" then return v end
+local e = {}
+for k, x in pairs(v) do e[#e + 1] = { type(k) == "number" and "n" or "s", tostring(k), ser(x) } end
+return { T = e }
 end
-local function newSelfKey(t)
-local k = next(t)
-if typeof(k) == "Instance" then return LocalPlayer end
-if type(k) == "string" then
-return tonumber(k) and tostring(LocalPlayer.UserId) or LocalPlayer.Name
+local function deser(v)
+if type(v) ~= "table" or type(v.T) ~= "table" then return v end
+local o = {}
+for _, e in ipairs(v.T) do
+local k = (e[1] == "n") and tonumber(e[2]) or e[2]
+if k ~= nil then o[k] = deser(e[3]) end
 end
-return LocalPlayer.UserId
+return o
 end
-local function findMod()
-if V.Mod then return V.Mod end
-if not getloadedmodules then return nil end
-pcall(function()
-for _, m in ipairs(getloadedmodules()) do
-local ok, v = pcall(require, m)
-if ok and type(v) == "table" and type(rawget(v, "wear")) == "table" then
-V.Mod, V.ModName = v, m.Name
+function V.saveTpl()
+local ok, js = pcall(function() return HS:JSONEncode(ser(V.Tpl)) end)
+V.TplS = ok and js or ""
+end
+if type(V.TplS) == "string" and V.TplS ~= "" then
+local ok, d = pcall(function() return HS:JSONDecode(V.TplS) end)
+if ok then V.Tpl = deser(d) end
+end
+local function describe(v, depth)
+depth = depth or 0
+if type(v) ~= "table" then return tostring(v) end
+if depth > 3 then return "{...}" end
+local out, n = {}, 0
+for k, x in pairs(v) do
+n += 1
+if n > 12 then
+out[#out + 1] = "..."
 break
 end
+out[#out + 1] = tostring(k) .. "=" .. describe(x, depth + 1)
 end
-end)
-return V.Mod
+return "{" .. table.concat(out, ", ") .. "}"
 end
-function V.find()
-local mod = findMod()
-if mod then
-local wear = rawget(mod, "wear")
-if hasSlotKeys(wear) then
-V.Found = { t = wear, path = V.ModName .. ".wear" }
-return V.Found
+local function log(kind, args)
+local parts = {}
+for i = 1, args.n do parts[i] = describe(args[i]) end
+table.insert(V.Log, os.date("%H:%M:%S") .. " " .. kind .. "(" .. table.concat(parts, ", ") .. ")")
+while #V.Log > 8 do table.remove(V.Log, 1) end
 end
-local k = selfKey(wear)
-if k == nil and next(wear) == nil then
-V.Found = { t = wear, path = V.ModName .. ".wear (kosong)" }
-return V.Found
+local function findCloth(v, depth, out)
+out = out or {}
+depth = depth or 0
+if isClothId(v) then
+out[#out + 1] = v
+elseif type(v) == "table" and depth < 4 then
+for _, x in pairs(v) do findCloth(x, depth + 1, out) end
 end
-if k == nil then
-k = newSelfKey(wear)
-rawset(wear, k, {})
-V.Created = { t = wear, k = k }
+return out
 end
-local own = rawget(wear, k)
-if type(own) == "table" then
-V.Found = { t = own, path = ("%s.wear[%s]"):format(V.ModName, tostring(k)), key = k }
-return V.Found
+local function wearPacket()
+local net = Session.Found and Session.Found.Net
+local p = type(net) == "table" and rawget(net, "wear") or nil
+if type(p) == "table" and type(rawget(p, "send")) == "function" and type(rawget(p, "listen")) == "function" then
+return p
 end
+return nil
 end
-local roots = {}
-if type(Refs.State) == "table" then roots[#roots + 1] = { Refs.State, "Refs.State" } end
-if type(Refs.Hud) == "table" then roots[#roots + 1] = { Refs.Hud, "Refs.Hud" } end
-local best, bestSc, bestPath = nil, 0, nil
-local seen, nodes = {}, 0
-local function walk(t, path, depth)
-if seen[t] or nodes > 3000 then return end
-seen[t] = true
-nodes += 1
+local lastSendAt = 0
+function V.hook()
+local p = wearPacket()
+if not p or V.Hooked == p then return p ~= nil end
+V.Hooked = p
 pcall(function()
-for k, v in pairs(t) do
-if type(v) == "table" and not seen[v] then
-local kp = path .. "." .. tostring(k)
-if wearName(k) and (hasSlotKeys(v) or scoreWear(v) > 0) then
-local sc = scoreWear(v) + (hasSlotKeys(v) and 5 or 0)
-if sc > bestSc then best, bestSc, bestPath = v, sc, kp end
+for k, v in pairs(p) do
+if type(v) == "table" and (k == LocalPlayer.Name or k == tostring(LocalPlayer.UserId)) then rawset(p, k, nil) end
 end
-if depth < 3 then walk(v, kp, depth + 1) end
+end)
+local orig = rawget(p, "send")
+V.OrigSend = orig
+rawset(p, "send", function(...)
+local args = table.pack(...)
+pcall(log, "kirim", args)
+local ids = findCloth(clean(args, 0))
+for _, id in ipairs(ids) do
+if V.Bag[id] then
+task.spawn(function() pcall(V.wearLocal, id, true) end)
+return nil
+end
+end
+lastSendAt = os.clock()
+return orig(...)
+end)
+pcall(p.listen, function(...)
+local args = table.pack(...)
+pcall(log, "terima", args)
+if V.Faking then return end
+if os.clock() - lastSendAt < 3 then
+local c = clean(args, 0)
+if c and #findCloth(c) > 0 then
+V.Tpl = c
+V.TplAt = os.clock()
+V.saveTpl()
 end
 end
 end)
+return true
 end
-for _, r in ipairs(roots) do walk(r[1], r[2], 0) end
-V.Found = best and { t = best, path = bestPath } or nil
-return V.Found
+local function build(id, remove)
+local tpl = V.Tpl
+if type(tpl) ~= "table" then
+return nil, "format paket belum dipelajari: pakai / lepas 1 baju ASLI sekali (dari tas game), lalu coba lagi"
+end
+local sl = itemSlot(id)
+local copy = clean(tpl, 0)
+local done = false
+local function bySlot(t, depth)
+if done or type(t) ~= "table" or depth > 4 then return end
+local slotKeys = 0
+for k in pairs(t) do
+if type(k) == "string" and V.SlotSet[k] then slotKeys += 1 end
+end
+if slotKeys > 0 then
+t[sl] = remove and 0 or id
+done = true
+return
+end
+for _, x in pairs(t) do bySlot(x, depth + 1) end
+end
+local function single(t, depth)
+if done or type(t) ~= "table" or depth > 4 then return end
+for k, x in pairs(t) do
+if isClothId(x) then
+t[k] = remove and 0 or id
+done = true
+elseif type(x) == "string" and V.SlotSet[x] then
+t[k] = sl
+end
+end
+if not done then
+for _, x in pairs(t) do single(x, depth + 1) end
+end
+end
+bySlot(copy, 0)
+if not done then single(copy, 0) end
+if not done then return nil, "format paket contoh tidak dikenali (kirim Cek data visual)" end
+return copy
+end
+function V.wearLocal(id, fromBag, remove)
+if not V.hook() then return false, "paket wear game tidak ketemu" end
+V.slots()
+local sl = itemSlot(id)
+if not sl then return false, "bukan item baju" end
+if fromBag and V.Worn and V.Worn[sl] == id then remove = true end
+local args, why = build(id, remove)
+if not args then return false, why end
+local p = V.Hooked
+local okL, list = pcall(p.getListeners)
+if not okL or type(list) ~= "table" then return false, "daftar pendengar paket tidak terbaca" end
+V.Faking = true
+local n = 0
+for _, fn in pairs(list) do
+if type(fn) == "function" then
+local ok = pcall(fn, table.unpack(args, 1, args.n or #args))
+if ok then n += 1 end
+end
+end
+V.Faking = false
+V.Worn = V.Worn or {}
+V.Worn[sl] = (not remove) and id or nil
+if n == 0 then return false, "pendengar paket menolak data buatan" end
+return true
+end
+function V.slots()
+if V.SlotSet then return V.SlotSet end
+local t = {}
+for _, it in pairs(ItemDB) do
+local sl = rawget(it, "slot")
+if type(sl) == "string" then t[sl] = true end
+end
+V.SlotSet = t
+return t
 end
 function V.search(q)
 q = string.lower((tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")))
@@ -11651,90 +11694,63 @@ end)
 while #out > 30 do table.remove(out) end
 return out
 end
-local function applyOne(id)
-local sl = itemSlot(id)
-if not sl then return false, "bukan item baju (tidak punya slot)" end
-local f = V.Found or V.find()
-if not f then return false, "data baju game tidak ketemu (tekan Cek data visual & kirim hasilnya)" end
-if not V.Applied[sl] then V.Applied[sl] = { old = rawget(f.t, sl) } end
-V.Applied[sl].id = id
-rawset(f.t, sl, id)
-return true
-end
 function V.apply()
-V.Found = nil
-local okN, failN, why = 0, 0, nil
-local used = {}
+V.slots()
+local used, okN, why = {}, 0, nil
 for i = #V.Wear, 1, -1 do
-local id = V.Wear[i]
-local sl = itemSlot(id)
-if sl and used[sl] then
-table.remove(V.Wear, i)
-elseif sl then
-used[sl] = true
-end
+local sl = itemSlot(V.Wear[i])
+if not sl or used[sl] then table.remove(V.Wear, i) else used[sl] = true end
 end
 for _, id in ipairs(V.Wear) do
-local ok, e = applyOne(id)
-if ok then okN += 1 else
-failN += 1
-why = ("%s: %s"):format(itemName(id), tostring(e))
-end
+local ok, e = V.wearLocal(id)
+if ok then okN += 1 else why = ("%s: %s"):format(itemName(id), tostring(e)) end
 end
 V.Status = (#V.Wear == 0) and "Mati"
-or (("%d terpasang%s%s"):format(okN, failN > 0 and (", " .. failN .. " gagal") or "", why and (" | " .. why) or ""))
-if V.Found then V.Status = V.Status .. "\nData: " .. tostring(V.Found.path) end
-return okN, failN, why
+or (("%d dipakai%s"):format(okN, why and (" | gagal " .. why) or ""))
+return okN, why
 end
 function V.remove(id)
 local idx = table.find(V.Wear, id)
 if idx then table.remove(V.Wear, idx) end
-local sl = itemSlot(id)
-local f = V.Found
-if sl and f and V.Applied[sl] then
-pcall(rawset, f.t, sl, V.Applied[sl].old)
-V.Applied[sl] = nil
-end
+pcall(V.wearLocal, id, false, true)
 V.apply()
 end
 function V.clear()
-local f = V.Found
-if f then
-for sl, a in pairs(V.Applied) do pcall(rawset, f.t, sl, a.old) end
-end
-if V.Created then
-pcall(rawset, V.Created.t, V.Created.k, nil)
-V.Created = nil
-end
-table.clear(V.Applied)
+for _, id in ipairs(V.Wear) do pcall(V.wearLocal, id, false, true) end
 table.clear(V.Wear)
-V.Found = nil
-V.Status = "Mati"
+V.Status = "Mati (baju asli kembali setelah ganti baju / pindah world)"
+end
+function V.toBag(id, n)
+if not Refs.Inv then return false, "tas game belum terbaca (Hubungkan ke game)" end
+n = math.clamp(math.floor(tonumber(n) or 1), 1, 200)
+local before = invCount(id)
+local ok, e = pcall(function() Refs.Inv:add(id, n) end)
+if not ok then return false, tostring(e) end
+V.Bag[id] = (V.Bag[id] or 0) + n
+V.hook()
+return true, invCount(id) - before
+end
+function V.clearBag()
+local n = 0
+for id, cnt in pairs(V.Bag) do
+pcall(function() Refs.Inv:remove(id, math.min(cnt, invCount(id))) end)
+n += 1
+end
+table.clear(V.Bag)
+return n
 end
 task.spawn(function()
-local lastWorld = nil
+local lastWorld
 while alive() do
-task.wait(0.5)
-if #V.Wear > 0 and Refs.World then
-local w = Refs.World
-if w ~= lastWorld then
-lastWorld = w
-table.clear(V.Applied)
 task.wait(1)
+pcall(V.hook)
+local w = Refs.World
+if w and w ~= lastWorld and Guard.inWorld() then
+lastWorld = w
+V.Worn = {}
+if #V.Wear > 0 then
+task.wait(2)
 pcall(V.apply)
-else
-local f = V.Found
-if f then
-for sl, a in pairs(V.Applied) do
-local cur = rawget(f.t, sl)
-if cur ~= a.id then
-a.old = cur
-pcall(rawset, f.t, sl, a.id)
-end
-end
-else
-pcall(V.apply)
-end
 end
 end
 end
@@ -11743,8 +11759,9 @@ end)() end
 safe(function()
 Box.VisItem:Paragraph({
 Title = "Cara pakai",
-Desc = "Tulis nama item, pilih hasilnya, tekan Pakai visual. Tidak perlu punya / memakai item aslinya. "
-.. "Hanya terlihat di layar kamu (pemain lain tetap melihat baju asli). 1 bagian tubuh = 1 item",
+Desc = "Sekali saja: pakai / lepas 1 baju ASLI dari tas game (supaya SkyP belajar format game). "
+.. "Lalu tulis nama item, pilih hasilnya, tekan Pakai visual, atau masukkan ke tas lalu pakai dari tas game. "
+.. "Hanya terlihat di layar kamu, pemain lain tetap melihat baju asli",
 })
 end)
 safe(function()
@@ -11781,22 +11798,46 @@ UI.Vis.Pick = tonumber(string.match(tostring(v), "%[(%d+)%]$"))
 end,
 })
 end)
+addNumber(Box.VisItem, {
+Title = "Jumlah ke tas",
+Desc = "Untuk 'Masukkan ke tas' (1-200)",
+Min = 1, Max = 200, Step = 1, Default = UI.Vis.Count,
+Callback = function(v) UI.Vis.Count = math.floor(v) end,
+})
 safe(function()
 Box.VisItem:Button({
-Title = "Pakai visual",
-Desc = "Item yang dipilih di 'Hasil cari'",
+Title = "Masukkan ke tas",
+Desc = "Item di 'Hasil cari' masuk ke tas (hanya di HP ini, tidak langsung dipakai). Pakai dari tas game seperti biasa",
 Callback = function()
 local V = UI.Vis
 local id = V.Pick
 if not id then return notify("Visual", "Cari & pilih item dulu", 4) end
-if not table.find(V.Wear, id) then V.Wear[#V.Wear + 1] = id end
-local okN, failN, why = V.apply()
-if why and string.find(why, itemName(id), 1, true) then
-if table.find(V.Wear, id) then table.remove(V.Wear, table.find(V.Wear, id)) end
-notify("Visual", "Gagal: " .. tostring(why), 6)
+local ok, r = V.toBag(id, V.Count)
+if ok then
+notify("Visual", ("%s x%d masuk tas (visual)"):format(itemName(id), V.Count), 4)
 else
-notify("Visual", itemName(id) .. " terpasang (hanya di layar kamu)", 4)
+notify("Visual", "Gagal: " .. tostring(r), 5)
 end
+end,
+})
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Pakai visual",
+Desc = "Langsung pakai item di 'Hasil cari' (tersimpan, dipakai lagi tiap masuk world)",
+Callback = function()
+local V = UI.Vis
+local id = V.Pick
+if not id then return notify("Visual", "Cari & pilih item dulu", 4) end
+local ok, why = V.wearLocal(id)
+if not ok then return notify("Visual", "Gagal: " .. tostring(why), 6) end
+for i = #V.Wear, 1, -1 do
+local it = ItemDB[V.Wear[i]]
+if it and ItemDB[id] and rawget(it, "slot") == rawget(ItemDB[id], "slot") then table.remove(V.Wear, i) end
+end
+V.Wear[#V.Wear + 1] = id
+V.Status = #V.Wear .. " dipakai"
+notify("Visual", itemName(id) .. " dipakai (hanya di layar kamu)", 4)
 end,
 })
 end)
@@ -11815,10 +11856,20 @@ end)
 safe(function()
 Box.VisItem:Button({
 Title = "Lepas semua visual",
-Desc = "Kembali ke baju asli",
+Desc = "Berhenti memakai visual tersimpan",
 Callback = function()
 UI.Vis.clear()
 notify("Visual", "Visual dilepas", 3)
+end,
+})
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Hapus item visual dari tas",
+Desc = "Item buatan yang dimasukkan lewat 'Masukkan ke tas'",
+Callback = function()
+local n = UI.Vis.clearBag()
+notify("Visual", n .. " jenis item visual dihapus dari tas", 3)
 end,
 })
 end)
@@ -11827,9 +11878,13 @@ local shown
 while alive() do
 task.wait(1)
 local V = UI.Vis
-local names = {}
+local names, bag = {}, {}
 for _, id in ipairs(V.Wear) do names[#names + 1] = itemName(id) end
-local txt = tostring(V.Status) .. (#names > 0 and ("\nDipakai: " .. table.concat(names, ", ")) or "")
+for id, n in pairs(V.Bag) do bag[#bag + 1] = ("%s x%d"):format(itemName(id), n) end
+local txt = tostring(V.Status)
+.. "\nFormat game: " .. (V.Tpl and "sudah dipelajari" or "BELUM (pakai / lepas 1 baju asli sekali)")
+.. (#names > 0 and ("\nDipakai: " .. table.concat(names, ", ")) or "")
+.. (#bag > 0 and ("\nDi tas: " .. table.concat(bag, ", ")) or "")
 if txt ~= shown and UI.VisStatus then
 shown = txt
 pcall(function() UI.VisStatus:SetDesc(txt) end)
