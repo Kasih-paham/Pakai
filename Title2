@@ -1,6 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
--- Cara kerja: fungsi modul Roles game (legendOn, hasDr / drOn, titleOf, badgeOf, wrenchOf, guildRankTag) dibungkus.
+-- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
+-- v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) dan Content Creator sengaja tidak disediakan.
@@ -51,100 +52,149 @@ local TITLES = {}                 -- { { key, name } }
 local GUILDS = { 0, 4, 3, 2 }     -- 0 = tidak ada / GL / GC / GE
 local GUILD_TXT = { [4] = "(GL)", [3] = "(GC)", [2] = "(GE)" }
 
--- argumen menunjuk karakter sendiri? (UserId / nama / data pemain {uid, nama})
+-- argumen menunjuk karakter sendiri? (UserId / nama / Player / karakter / data pemain {uid, nama})
 local myId, myName = LocalPlayer.UserId, LocalPlayer.Name
+local myDisp = LocalPlayer.DisplayName
 local function isMe(...)
     local n = select("#", ...)
     for i = 1, math.min(n, 4) do
         local a = select(i, ...)
-        if a == myId or a == myName or a == LocalPlayer or (type(a) == "string" and a == tostring(myId)) then return true end
+        if a == myId or a == LocalPlayer or (a ~= nil and a == LocalPlayer.Character) then return true end
+        if type(a) == "string" and (a == myName or a == myDisp or a == tostring(myId)) then return true end
         if type(a) == "table" then
-            local u = rawget(a, 1) or rawget(a, "userId") or rawget(a, "uid") or rawget(a, "id")
+            local u = rawget(a, 1) or rawget(a, "userId") or rawget(a, "uid") or rawget(a, "id") or rawget(a, "UserId")
             if u == myId or tonumber(u) == myId then return true end
+            local nm = rawget(a, "name") or rawget(a, "Name") or rawget(a, 2)
+            if nm == myName then return true end
         end
     end
     return false
 end
 
-local function wrap(name, make)
+-- ---------- catatan diagnosa: argumen & jawaban asli tiap fungsi (maks 8 pola berbeda per fungsi) ----------
+F.Log = {}      -- [nama] = { pola, ... }
+F.LogSeen = {}  -- [nama] = { [pola] = true }
+local function short(v, deep)
+    local t = typeof(v)
+    if v == nil then return "nil" end
+    if t == "string" then return '"' .. string.sub(v, 1, 28) .. '"' end
+    if t == "number" or t == "boolean" then return tostring(v) end
+    if t == "Instance" then
+        local ok, s = pcall(function() return v.ClassName .. ":" .. v.Name end)
+        return ok and s or "Instance"
+    end
+    if t == "table" then
+        if deep then return "{..}" end
+        local parts, c = {}, 0
+        for k, x in pairs(v) do
+            c += 1
+            if c > 5 then parts[#parts + 1] = "..." break end
+            parts[#parts + 1] = tostring(k) .. "=" .. short(x, true)
+        end
+        return "{" .. table.concat(parts, ",") .. "}"
+    end
+    if t == "function" then return "fn" end
+    return t
+end
+local function logCall(name, me, ret, src, ...)
+    local seen = F.LogSeen[name]
+    if not seen then seen = {} F.LogSeen[name] = seen F.Log[name] = {} end
+    if #F.Log[name] >= 8 or (F.Calls[name] or 0) > 3000 then return end
+    local args = {}
+    for i = 1, math.min(select("#", ...), 4) do args[i] = short((select(i, ...))) end
+    src = type(src) == "string" and (" @" .. (string.match(src, "([^%.]+)$") or src)) or ""
+    local key = "(" .. table.concat(args, ", ") .. ") -> " .. short(ret) .. (me and " [AKU]" or "") .. src
+    if not seen[key] then
+        seen[key] = true
+        table.insert(F.Log[name], key)
+    end
+end
+
+local function wrap(name, rule)
     local orig = rawget(R, name)
-    if type(orig) ~= "function" then return end
+    if type(orig) ~= "function" or F.Orig[name] then return end
     F.Orig[name] = orig
     F.Calls[name] = 0
-    rawset(R, name, make(orig, function() F.Calls[name] += 1 end))
+    rawset(R, name, function(...)
+        F.Calls[name] += 1
+        local res = table.pack(orig(...))
+        local me = isMe(...)
+        local lg = F.Log[name]
+        if not lg or #lg < 8 then
+            local okS, src = pcall(debug.info, 2, "s") -- script yang memanggil
+            pcall(logCall, name, me, res[1], okS and src or nil, ...)
+        end
+        if F.On and rule then
+            local ok, handled, v = pcall(rule, me, select("#", ...), res[1], ...)
+            if ok and handled then return v end
+        end
+        return table.unpack(res, 1, res.n)
+    end)
+end
+
+local function tbl(name) local t = rawget(R, name) return type(t) == "table" and t or nil end
+local function guildValue(r)
+    if type(r) == "number" then return F.Guild end
+    local tags = tbl("GUILD_TAGS")
+    return (tags and tags[F.Guild]) or GUILD_TXT[F.Guild]
 end
 
 local function hook()
-    wrap("legendOn", function(orig, count)
-        return function(...)
-            count()
-            if F.On and F.Legend and isMe(...) then return true end
-            return orig(...)
+    -- "of Legend" & "Dr." (sudah terbukti jalan)
+    wrap("legendOn", function(me) if me and F.Legend then return true, true end end)
+    wrap("hasDr", function(me) if me and F.Dr then return true, true end end)
+    wrap("drOn", function(me) if me and F.Dr then return true, true end end)
+    wrap("drHidden", function(me) if me and F.Dr then return true, false end end)
+
+    -- title: game punya beberapa jalur, semuanya dicoba
+    wrap("titleOf", function(me) if me and F.Title then return true, F.Title end end)
+    wrap("ownTitle", function(me, n, r, a1, a2)
+        if not F.Title then return end
+        if type(r) == "boolean" then -- bentuk "punya title ini?"
+            if me or a1 == F.Title or a2 == F.Title then return true, true end
+            return
+        end
+        if me or n == 0 then return true, F.Title end
+    end)
+    wrap("tagKey", function(me, n, r)
+        if me and F.Title and (r == nil or type(r) == "string") then return true, F.Title end
+    end)
+    wrap("titlesOf", function(me, n, r)
+        if not (me and F.Title) then return end
+        if type(r) == "table" then
+            if table.find(r, F.Title) or r[F.Title] then return end
+            local c = table.clone(r)
+            if #r > 0 or next(r) == nil then c[#c + 1] = F.Title else c[F.Title] = true end
+            return true, c
+        end
+        if r == nil then return true, { F.Title } end
+    end)
+    wrap("titleName", function(me)
+        if me and F.Title then
+            local nm, t = tbl("TITLE_NAMES"), tbl("TITLES")
+            return true, (nm and nm[F.Title]) or (t and t[F.Title]) or F.Title
         end
     end)
-    for _, nm in ipairs({ "hasDr", "drOn" }) do
-        wrap(nm, function(orig, count)
-            return function(...)
-                count()
-                if F.On and F.Dr and isMe(...) then return true end
-                return orig(...)
-            end
-        end)
+    wrap("tagSize", function(me)
+        local sz = tbl("TITLE_SIZES")
+        if me and F.Title and sz and sz[F.Title] then return true, sz[F.Title] end
+    end)
+    wrap("badgeOf", function(me)
+        local b = tbl("TITLE_BADGES")
+        if me and F.Title and b and b[F.Title] ~= nil then return true, b[F.Title] end
+    end)
+    wrap("wrenchOf", function(me)
+        local w = tbl("TITLE_WRENCHES")
+        if me and F.Title and w and w[F.Title] ~= nil then return true, w[F.Title] end
+    end)
+    -- hanya dicatat (bentuk jawabannya belum diketahui)
+    for _, nm in ipairs({ "titleColor", "tagColor", "tagText", "stillTag", "nameKey", "nameCode", "nameOf", "lineName" }) do
+        wrap(nm, nil)
     end
-    wrap("drHidden", function(orig, count)
-        return function(...)
-            count()
-            if F.On and F.Dr and isMe(...) then return false end
-            return orig(...)
-        end
-    end)
-    wrap("titleOf", function(orig, count)
-        return function(...)
-            count()
-            if F.On and F.Title and isMe(...) then return F.Title end
-            return orig(...)
-        end
-    end)
-    wrap("titlesOf", function(orig, count)
-        return function(...)
-            count()
-            local r = orig(...)
-            if F.On and F.Title and isMe(...) and type(r) == "table" and not table.find(r, F.Title) then
-                local c = table.clone(r)
-                c[#c + 1] = F.Title
-                return c
-            end
-            return r
-        end
-    end)
-    wrap("badgeOf", function(orig, count)
-        return function(...)
-            count()
-            local b = rawget(R, "TITLE_BADGES")
-            if F.On and F.Title and isMe(...) and type(b) == "table" and b[F.Title] ~= nil then return b[F.Title] end
-            return orig(...)
-        end
-    end)
-    wrap("wrenchOf", function(orig, count)
-        return function(...)
-            count()
-            local w = rawget(R, "TITLE_WRENCHES")
-            if F.On and F.Title and isMe(...) and type(w) == "table" and w[F.Title] ~= nil then return w[F.Title] end
-            return orig(...)
-        end
-    end)
-    wrap("guildRankTag", function(orig, count)
-        return function(...)
-            count()
-            local r = orig(...)
-            if F.On and F.Guild and isMe(...) then
-                if type(r) == "number" then return F.Guild end
-                local tags = rawget(R, "GUILD_TAGS")
-                return (type(tags) == "table" and tags[F.Guild]) or GUILD_TXT[F.Guild]
-            end
-            return r
-        end
-    end)
+
+    -- tag guild: game memakai guildTag (guildRankTag tidak dipanggil untuk nama)
+    wrap("guildTag", function(me, n, r) if me and F.Guild then return true, guildValue(r) end end)
+    wrap("guildRankTag", function(me, n, r) if me and F.Guild then return true, guildValue(r) end end)
 end
 
 local function unhook()
@@ -161,8 +211,8 @@ local okH = pcall(function() gui.Parent = (gethui and gethui()) or game:GetServi
 if not okH or not gui.Parent then gui.Parent = LocalPlayer:WaitForChild("PlayerGui") end
 
 local main = Instance.new("Frame")
-main.Size = UDim2.fromOffset(280, 286)
-main.Position = UDim2.new(0, 20, 0.5, -143)
+main.Size = UDim2.fromOffset(280, 330)
+main.Position = UDim2.new(0, 20, 0.5, -165)
 main.BackgroundColor3 = Color3.fromRGB(18, 22, 32)
 main.BorderSizePixel = 0
 main.Active = true
@@ -218,8 +268,9 @@ local bDr = btn("", 98)
 local bTitle = btn("", 130)
 local bGuild = btn("", 162)
 local bCopy = btn("Salin pilihan", 194)
+local bDiag = btn("Salin diagnosa (kalau title belum tampil)", 226)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
-    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 228), Size = UDim2.new(1, -24, 0, 54) })
+    TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 260), Size = UDim2.new(1, -24, 0, 66) })
 
 local titleIdx, guildIdx = 0, 1
 local function titleName()
@@ -259,6 +310,27 @@ bCopy.MouseButton1Click:Connect(function()
         notify("Title Visual", "Pilihan disalin ke clipboard")
     else
         notify("Title Visual", "Executor tidak bisa menyalin")
+    end
+end)
+
+bDiag.MouseButton1Click:Connect(function()
+    local out = { "-- SkyP Title Visual v2: diagnosa",
+        ("pilihan: legend=%s dr=%s title=%s guild=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
+            tostring(F.Title), tostring(F.Guild), tostring(myId), myName) }
+    local names = {}
+    for name in pairs(F.Calls) do names[#names + 1] = name end
+    table.sort(names)
+    for _, name in ipairs(names) do
+        out[#out + 1] = ("%s  (dipanggil %d)"):format(name, F.Calls[name])
+        for _, line in ipairs(F.Log[name] or {}) do out[#out + 1] = "   " .. line end
+    end
+    local txt = table.concat(out, "\n")
+    local clip = setclipboard or toclipboard
+    if type(clip) == "function" and pcall(clip, txt) then
+        notify("Title Visual", "Diagnosa disalin, tempel ke developer")
+    else
+        notify("Title Visual", "Executor tidak bisa menyalin")
+        print(txt)
     end
 end)
 
@@ -311,7 +383,9 @@ task.spawn(function()
     notify("Title Visual", "Siap. Pilih title, lalu keluar-masuk world supaya nama digambar ulang")
     while App.alive do
         local parts = {}
-        for name, n in pairs(F.Calls) do parts[#parts + 1] = name .. " " .. n end
+        for name, n in pairs(F.Calls) do
+            if n > 0 then parts[#parts + 1] = name .. " " .. n end
+        end
         table.sort(parts)
         stat.Text = "Keluar-masuk world setelah memilih.\nDipanggil game: " .. table.concat(parts, ", ")
         task.wait(1)
