@@ -1,7 +1,7 @@
 -- SkyP Title Visual (script terpisah, untuk mencoba dulu)
 -- Mengubah tampilan title di nama SENDIRI, hanya di layar HP ini (server & pemain lain tetap melihat nama asli).
 -- Cara kerja: fungsi modul Roles game (legendOn, drOn, titleOf, ownTitle, tagKey, badgeOf, guildTag, ...) dibungkus.
--- v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
+-- v4: uji titleColor + struktur nametag. v3: badge title diperbaiki (teks gambar, bukan tabel). v2: tiap fungsi juga dicatat (argumen & jawaban asli). Kalau title belum tampil, tekan "Salin diagnosa".
 -- Kalau yang ditanya karakter sendiri, jawabannya diganti pilihan di menu ini.
 -- Setelah cocok: tekan "Salin pilihan", tempel ke developer untuk dimasukkan ke script utama.
 -- Title staff (Developer / Moderator / Admin) dan Content Creator sengaja tidak disediakan.
@@ -94,6 +94,15 @@ local function short(v, deep)
         return "{" .. table.concat(parts, ",") .. "}"
     end
     if t == "function" then return "fn" end
+    if t == "Color3" then return ("rgb(%d,%d,%d)"):format(math.floor(v.R * 255 + 0.5), math.floor(v.G * 255 + 0.5), math.floor(v.B * 255 + 0.5)) end
+    if t == "ColorSequence" then
+        local parts = {}
+        for _, k in ipairs(v.Keypoints) do
+            parts[#parts + 1] = ("%d,%d,%d"):format(math.floor(k.Value.R * 255 + 0.5), math.floor(k.Value.G * 255 + 0.5), math.floor(k.Value.B * 255 + 0.5))
+        end
+        return "CS[" .. table.concat(parts, " | ") .. "]"
+    end
+    if t == "Vector2" or t == "UDim2" or t == "EnumItem" then return tostring(v) end
     return t
 end
 local function logCall(name, me, ret, src, ...)
@@ -188,8 +197,16 @@ local function hook()
         if type(e) == "string" then return true, e end
     end)
     wrap("wrenchOf", nil) -- hanya dicatat
+    -- v4: warna nama title. tagColor asli = nil untuk akun tanpa title, jadi warna diambil dari titleColor(kunci title)
+    wrap("tagColor", function(me)
+        if not (me and F.Title) then return end
+        local tc = F.Orig.titleColor or rawget(R, "titleColor")
+        if type(tc) ~= "function" then return end
+        local ok, c = pcall(tc, F.Title)
+        if ok and c ~= nil then return true, c end
+    end)
     -- hanya dicatat (bentuk jawabannya belum diketahui)
-    for _, nm in ipairs({ "titleColor", "tagColor", "tagText", "stillTag", "nameKey", "nameCode", "nameOf", "lineName" }) do
+    for _, nm in ipairs({ "titleColor", "tagText", "stillTag", "nameKey", "nameCode", "nameOf", "lineName" }) do
         wrap(nm, nil)
     end
 
@@ -269,7 +286,7 @@ local bDr = btn("", 98)
 local bTitle = btn("", 130)
 local bGuild = btn("", 162)
 local bCopy = btn("Salin pilihan", 194)
-local bDiag = btn("Salin diagnosa (kalau title belum tampil)", 226)
+local bDiag = btn("Salin diagnosa + struktur nama", 226)
 local stat = label({ Text = "-", TextSize = 10, TextColor3 = Color3.fromRGB(150, 160, 180), TextWrapped = true,
     TextYAlignment = Enum.TextYAlignment.Top, Position = UDim2.fromOffset(12, 260), Size = UDim2.new(1, -24, 0, 66) })
 
@@ -314,8 +331,101 @@ bCopy.MouseButton1Click:Connect(function()
     end
 end)
 
+local probe, dumpTag
+
+-- v4: panggil fungsi Roles asli dengan kunci title & id sendiri, untuk melihat bentuk jawabannya
+probe = function(out)
+    out[#out + 1] = "-- uji fungsi (kunci title / id sendiri)"
+    local key = F.Title or "sponsor"
+    for _, nm in ipairs({ "titleColor", "titleName", "tagColor", "tagKey", "stillTag", "nameKey", "ownTitle",
+        "tagSize", "badgeOf", "wrenchOf", "titleOf", "showsStaff", "drRed", "tagText" }) do
+        local fn = F.Orig[nm] or rawget(R, nm)
+        if type(fn) == "function" then
+            local a = { pcall(fn, key) }
+            local b = { pcall(fn, myId) }
+            out[#out + 1] = ("   %s(%q) -> %s | %s(id) -> %s"):format(nm, key,
+                a[1] and short(a[2]) or ("ERR " .. tostring(a[2])), nm, b[1] and short(b[2]) or ("ERR " .. tostring(b[2])))
+        end
+    end
+end
+
+-- v4: struktur nametag sendiri (kotak berisi "BitmapText" tepat di atas tengah layar)
+dumpTag = function(out)
+    out[#out + 1] = "-- struktur nametag"
+    local pg = LocalPlayer:FindFirstChildOfClass("PlayerGui")
+    if not pg then out[#out + 1] = "PlayerGui tidak ada" return end
+    local cam = workspace.CurrentCamera
+    local vp = cam and cam.ViewportSize or Vector2.new(1280, 720)
+    local cx, cy = vp.X / 2, vp.Y / 2
+    local cands = {}
+    for _, bm in ipairs(pg:GetDescendants()) do
+        if bm.Name == "BitmapText" and bm:IsA("GuiObject") and bm.Visible and bm.AbsoluteSize.X > 0 then
+            local o = bm.Parent
+            if o and o:IsA("GuiObject") then
+                local p, sz = bm.AbsolutePosition, bm.AbsoluteSize
+                local dx = math.abs(p.X + sz.X / 2 - cx)
+                local dy = cy - (p.Y + sz.Y / 2)
+                if dx <= vp.X * 0.12 and dy > vp.Y * 0.02 and dy < vp.Y * 0.45 then
+                    cands[#cands + 1] = { bm = bm, score = dx * 3 + dy }
+                end
+            end
+        end
+    end
+    table.sort(cands, function(a, b) return a.score < b.score end)
+    out[#out + 1] = ("kandidat: %d | layar %dx%d"):format(#cands, math.floor(vp.X), math.floor(vp.Y))
+    local c = cands[1]
+    if not c then return end
+    local root = c.bm.Parent
+    if root.Parent and root.Parent:IsA("GuiObject") then root = root.Parent end
+    out[#out + 1] = "jalur: " .. root:GetFullName()
+    local lines = 0
+    local function props(o)
+        local t = { o.ClassName, o.Name }
+        if o:IsA("GuiObject") then
+            local f = math.floor
+            t[#t + 1] = ("vis=%s size=%dx%d pos=%d,%d"):format(tostring(o.Visible), f(o.AbsoluteSize.X), f(o.AbsoluteSize.Y),
+                f(o.AbsolutePosition.X - cx), f(o.AbsolutePosition.Y - cy))
+            if o.BackgroundTransparency < 1 then t[#t + 1] = "bg=" .. short(o.BackgroundColor3) end
+        end
+        if o:IsA("ImageLabel") or o:IsA("ImageButton") then
+            t[#t + 1] = "img=" .. tostring(o.Image)
+            if o.ImageColor3 ~= Color3.new(1, 1, 1) then t[#t + 1] = "col=" .. short(o.ImageColor3) end
+            if o.ImageTransparency ~= 0 then t[#t + 1] = "tr=" .. o.ImageTransparency end
+            if o.ImageRectSize ~= Vector2.zero then t[#t + 1] = "rect=" .. tostring(o.ImageRectOffset) .. "/" .. tostring(o.ImageRectSize) end
+        elseif o:IsA("TextLabel") or o:IsA("TextButton") then
+            t[#t + 1] = ("txt=%q col=%s"):format(string.sub(o.Text, 1, 40), short(o.TextColor3))
+        elseif o:IsA("UIGradient") then
+            t[#t + 1] = "grad=" .. short(o.Color) .. " en=" .. tostring(o.Enabled) .. " rot=" .. o.Rotation
+        elseif o:IsA("UIStroke") then
+            t[#t + 1] = "stroke=" .. short(o.Color) .. " th=" .. o.Thickness
+        end
+        local attrs = o:GetAttributes()
+        if next(attrs) then t[#t + 1] = "attr=" .. short(attrs) end
+        return table.concat(t, " ")
+    end
+    local function walk(o, depth)
+        if lines >= 140 then return end
+        lines += 1
+        local ind = string.rep("  ", depth)
+        if o.Name == "BitmapText" then
+            local kids = o:GetChildren()
+            local first = kids[1]
+            out[#out + 1] = ind .. props(o) .. (" | %d huruf, huruf1=%s"):format(#kids, first and props(first) or "-")
+            for _, k in ipairs(kids) do
+                if not (k:IsA("ImageLabel") or k:IsA("ImageButton")) then walk(k, depth + 1) end
+            end
+            return
+        end
+        out[#out + 1] = ind .. props(o)
+        if depth < 6 then
+            for _, k in ipairs(o:GetChildren()) do walk(k, depth + 1) end
+        end
+    end
+    walk(root, 0)
+end
+
 bDiag.MouseButton1Click:Connect(function()
-    local out = { "-- SkyP Title Visual v3: diagnosa",
+    local out = { "-- SkyP Title Visual v4: diagnosa",
         ("pilihan: legend=%s dr=%s title=%s guild=%s | id=%s nama=%s"):format(tostring(F.Legend), tostring(F.Dr),
             tostring(F.Title), tostring(F.Guild), tostring(myId), myName) }
     local names = {}
@@ -325,6 +435,9 @@ bDiag.MouseButton1Click:Connect(function()
         out[#out + 1] = ("%s  (dipanggil %d)"):format(name, F.Calls[name])
         for _, line in ipairs(F.Log[name] or {}) do out[#out + 1] = "   " .. line end
     end
+    pcall(probe, out)
+    local okD, errD = pcall(dumpTag, out)
+    if not okD then out[#out + 1] = "dump nametag gagal: " .. tostring(errD) end
     local txt = table.concat(out, "\n")
     local clip = setclipboard or toclipboard
     if type(clip) == "function" and pcall(clip, txt) then
