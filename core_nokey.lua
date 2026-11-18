@@ -1,7 +1,7 @@
 local SKYP = ...
 if type(SKYP) ~= "table" then
 SKYP = {
-version = "v2.11.3",
+version = "v2.12.0",
 shared = {},
 onStop = {},
 isAlive = function() return true end,
@@ -50,7 +50,7 @@ return G.__Alfian == Session and SKYP.isAlive()
 end
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
 Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.11.3" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.12.0" end
 do
 local Lic = Session.Lic
 local HS = game:GetService("HttpService")
@@ -403,7 +403,7 @@ local ParticlesOk, ParticlesModule = Session.Found.Particles ~= nil, Session.Fou
 local MenuModOk, MenuModule = Session.Found.Menu ~= nil, Session.Found.Menu
 local RolesOk, RolesModule = Session.Found.Roles ~= nil, Session.Found.Roles
 local SfxOk, SfxModule = Session.Found.Sfx ~= nil, Session.Found.Sfx
-local WindUI = SKYP.shared.WindUI or (function()
+local WindUI = (function()
 local TS = game:GetService("TweenService")
 local UIS = game:GetService("UserInputService")
 local Lib = { _guis = {}, _conns = {}, _open = nil, Text = {}, Logo = "" }
@@ -496,10 +496,40 @@ local function strOf(v)
 if v == nil then return "" end
 return tostring(v)
 end
+Lib.Lang = "id"
+Lib.Dict = {}
+Lib._tl = setmetatable({}, { __mode = "k" })
+Lib._items = setmetatable({}, { __mode = "v" })
+Lib._relang = {}
+local function tr(s)
+if Lib.Lang ~= "id" and type(s) == "string" then
+local v = Lib.Dict[s]
+if v then return v end
+end
+return s
+end
+Lib.tr = tr
+local function trSet(o, s, prop)
+prop = prop or "Text"
+s = strOf(s)
+Lib._tl[o] = { src = s, prop = prop }
+o[prop] = tr(s)
+end
+function Lib.setLang(lang)
+Lib.Lang = (lang == "en") and "en" or "id"
+for o, d in pairs(Lib._tl) do pcall(function() o[d.prop] = tr(d.src) end) end
+for _, it in pairs(Lib._items) do
+pcall(function()
+it.title, it.desc = it.tl.Text, it.dl.Text
+it.key = (it.title .. " " .. it.desc):lower()
+end)
+end
+for _, f in ipairs(Lib._relang) do pcall(f) end
+end
 local function T(key, fallback)
 local v = Lib.Text[key]
-if type(v) == "string" and v ~= "" then return v end
-return fallback
+if type(v) == "string" and v ~= "" then return tr(v) end
+return tr(fallback)
 end
 local function makeDraggable(handle, target, threshold, onTap)
 local dragging, startIn, startPos, moved = false, nil, nil, false
@@ -725,11 +755,14 @@ local dl = text(info, {
 Size = UDim2.new(1, 0, 0, 0), AutomaticSize = AUTO_Y, TextSize = 11, TextColor3 = K.sub,
 TextWrapped = true, Text = desc, Visible = desc ~= "", LayoutOrder = 2,
 })
+trSet(tl, title)
+trSet(dl, desc)
 return row, tl, dl, topf
 end
 local function finish(self, obj, row, tl, dl)
-local it = { frame = row, title = tl.Text, desc = dl.Text }
+local it = { frame = row, title = tl.Text, desc = dl.Text, tl = tl, dl = dl }
 it.key = (it.title .. " " .. it.desc):lower()
+Lib._items[#Lib._items + 1] = it
 local tab = self._tab
 tab._items[#tab._items + 1] = it
 if self._sec then
@@ -738,6 +771,8 @@ s[#s + 1] = it
 end
 function obj:SetTitle(t)
 t = strOf(t)
+Lib._tl[tl] = { src = t, prop = "Text" }
+t = tr(t)
 if tl.Text ~= t then
 tl.Text = t
 it.title = t
@@ -746,6 +781,8 @@ end
 end
 function obj:SetDesc(t)
 t = strOf(t)
+Lib._tl[dl] = { src = t, prop = "Text" }
+t = tr(t)
 if dl.Text ~= t then
 dl.Text = t
 dl.Visible = t ~= ""
@@ -855,11 +892,12 @@ local box = mk("TextBox", {
 AnchorPoint = narrow and Vector2.new(0, 0) or Vector2.new(1, 0.5),
 Position = narrow and UDim2.new() or UDim2.new(1, 0, 0.5, 0),
 Size = narrow and UDim2.new(1, 0, 1, 0) or UDim2.fromOffset(160, 28),
-BackgroundColor3 = K.bg, Text = strOf(cfg.Value), PlaceholderText = strOf(cfg.Placeholder),
+BackgroundColor3 = K.bg, Text = strOf(cfg.Value), PlaceholderText = tr(strOf(cfg.Placeholder)),
 PlaceholderColor3 = K.sub, TextColor3 = K.text, Font = FM, TextSize = 12, ClearTextOnFocus = false,
 TextXAlignment = LEFT, TextTruncate = Enum.TextTruncate.AtEnd, BorderSizePixel = 0,
 }, slot)
 round(box, 6)
+trSet(box, cfg.Placeholder, "PlaceholderText")
 local st = outline(box, K.line, 1)
 pad(box, 8, 0, 8, 0)
 box.Focused:Connect(function() st.Color = K.accent end)
@@ -1018,9 +1056,9 @@ local txt
 if n == 0 then
 txt = strOf(obj.Placeholder) ~= "" and obj.Placeholder or T("Pick", "Pilih...")
 elseif n == 1 then
-txt = sel[1]
+txt = tr(sel[1])
 else
-txt = sel[1] .. "  +" .. (n - 1)
+txt = tr(sel[1]) .. "  +" .. (n - 1)
 end
 vl.Text = txt
 vl.TextColor3 = (n == 0) and K.sub or K.text
@@ -1105,7 +1143,7 @@ if c:IsA("GuiObject") then c:Destroy() end
 end
 local shown = 0
 for i, v in ipairs(obj.Values) do
-if filter == "" or v:lower():find(filter, 1, true) then
+if filter == "" or v:lower():find(filter, 1, true) or tr(v):lower():find(filter, 1, true) then
 shown = shown + 1
 local on = has(sel, v)
 local it = mk("TextButton", {
@@ -1122,7 +1160,7 @@ Size = UDim2.fromOffset(6, 6), BackgroundColor3 = K.accentHi, BorderSizePixel = 
 round(dot, 3)
 end
 text(it, {
-Position = UDim2.fromOffset(22, 0), Size = UDim2.new(1, -28, 1, 0), Text = v, Font = FM,
+Position = UDim2.fromOffset(22, 0), Size = UDim2.new(1, -28, 1, 0), Text = tr(v), Font = FM,
 TextSize = 12, TextColor3 = on and K.white or K.text,
 TextTruncate = Enum.TextTruncate.AtEnd,
 })
@@ -1191,6 +1229,7 @@ for _, v in ipairs(cfg.Values) do obj.Values[#obj.Values + 1] = tostring(v) end
 end
 sel = normalize(cfg.Value)
 sync()
+Lib._relang[#Lib._relang + 1] = sync
 return finish(self, obj, row, tl, dl)
 end
 function Methods:Section(cfg)
@@ -1211,10 +1250,10 @@ mk("Frame", {
 AnchorPoint = Vector2.new(0, 0.5), Position = UDim2.new(0, 12, 0.5, 0), Size = UDim2.fromOffset(3, 14),
 BackgroundColor3 = K.accent, BorderSizePixel = 0,
 }, head)
-text(head, {
+trSet(text(head, {
 Position = UDim2.fromOffset(24, 0), Size = UDim2.new(1, -50, 1, 0), Font = FB, TextSize = 13,
 Text = strOf(cfg.Title),
-})
+}), cfg.Title)
 local arrow = text(head, {
 AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(14, 14),
 TextSize = 9, TextColor3 = K.accentHi, TextXAlignment = Enum.TextXAlignment.Center,
@@ -1282,14 +1321,51 @@ round(backBtn, 8)
 backBtn.MouseEnter:Connect(function() tween(backBtn, 0.12, { BackgroundColor3 = K.accentLo }) end)
 backBtn.MouseLeave:Connect(function() tween(backBtn, 0.12, { BackgroundColor3 = K.card2 }) end)
 local SEARCH_W = math.clamp(math.floor(W * 0.3), 96, 190)
+local LANG_W = 64
 local titleL = text(header, {
-Position = UDim2.fromOffset(52, 7), Size = UDim2.new(1, -(52 + SEARCH_W + 58), 0, 18), Font = FB, TextSize = 15,
+Position = UDim2.fromOffset(52, 7), Size = UDim2.new(1, -(52 + SEARCH_W + 58 + LANG_W + 8), 0, 18), Font = FB, TextSize = 15,
 Text = homeTitle, TextTruncate = Enum.TextTruncate.AtEnd,
 })
 local subL = text(header, {
-Position = UDim2.fromOffset(52, 25), Size = UDim2.new(1, -(52 + SEARCH_W + 58), 0, 14), TextSize = 10,
+Position = UDim2.fromOffset(52, 25), Size = UDim2.new(1, -(52 + SEARCH_W + 58 + LANG_W + 8), 0, 14), TextSize = 10,
 TextColor3 = K.sub, Text = author, TextTruncate = Enum.TextTruncate.AtEnd,
 })
+do
+local sw = mk("TextButton", {
+AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -(50 + SEARCH_W + 8), 0.5, 0),
+Size = UDim2.fromOffset(LANG_W, 30), BackgroundColor3 = K.card, Text = "", AutoButtonColor = false,
+BorderSizePixel = 0,
+}, header)
+round(sw, 15)
+outline(sw, K.line, 1)
+local knob = mk("Frame", {
+Size = UDim2.fromOffset(LANG_W / 2 - 4, 24), Position = UDim2.fromOffset(3, 3),
+BackgroundColor3 = K.accent, BorderSizePixel = 0,
+}, sw)
+round(knob, 12)
+local lid = text(sw, {
+Position = UDim2.fromOffset(0, 0), Size = UDim2.new(0.5, 0, 1, 0), Text = "ID", Font = FB, TextSize = 11,
+TextXAlignment = CENTER,
+})
+local len = text(sw, {
+Position = UDim2.new(0.5, 0, 0, 0), Size = UDim2.new(0.5, 0, 1, 0), Text = "EN", Font = FB, TextSize = 11,
+TextXAlignment = CENTER,
+})
+local function paint(instant)
+local en = Lib.Lang == "en"
+local pos = en and UDim2.fromOffset(LANG_W / 2 + 1, 3) or UDim2.fromOffset(3, 3)
+if instant then knob.Position = pos else tween(knob, 0.15, { Position = pos }) end
+lid.TextColor3 = en and K.sub or K.white
+len.TextColor3 = en and K.white or K.sub
+end
+paint(true)
+sw.MouseButton1Click:Connect(function()
+local nl = (Lib.Lang == "en") and "id" or "en"
+Lib.setLang(nl)
+paint(false)
+if type(Lib.onLang) == "function" then pcall(Lib.onLang, nl) end
+end)
+end
 local minBtn = mk("TextButton", {
 AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -12, 0.5, 0), Size = UDim2.fromOffset(30, 30),
 BackgroundColor3 = K.card2, Text = "–", Font = FB, TextSize = 18, TextColor3 = K.text,
@@ -1301,11 +1377,12 @@ minBtn.MouseLeave:Connect(function() tween(minBtn, 0.12, { BackgroundColor3 = K.
 local search = mk("TextBox", {
 AnchorPoint = Vector2.new(1, 0.5), Position = UDim2.new(1, -50, 0.5, 0), Size = UDim2.fromOffset(SEARCH_W, 30),
 BackgroundColor3 = K.card, Text = "",
-PlaceholderText = strOf(cfg.SearchPlaceholder) ~= "" and cfg.SearchPlaceholder or T("Search", "Cari fitur..."),
+PlaceholderText = tr(strOf(cfg.SearchPlaceholder) ~= "" and cfg.SearchPlaceholder or "Cari fitur..."),
 PlaceholderColor3 = K.sub, TextColor3 = K.text, Font = FM, TextSize = 12, ClearTextOnFocus = false,
 TextXAlignment = LEFT, BorderSizePixel = 0,
 }, header)
 round(search, 15)
+trSet(search, strOf(cfg.SearchPlaceholder) ~= "" and cfg.SearchPlaceholder or "Cari fitur...", "PlaceholderText")
 local searchLine = outline(search, K.line, 1)
 pad(search, 12, 0, 12, 0)
 search.Focused:Connect(function() searchLine.Color = K.accent end)
@@ -1345,7 +1422,7 @@ orderN = orderN + 1
 return orderN
 end
 local function tabMatches(t, q)
-if t.title:lower():find(q, 1, true) then return true end
+if t.title:lower():find(q, 1, true) or tr(t.title):lower():find(q, 1, true) then return true end
 for _, it in ipairs(t._items) do
 if it.key:find(q, 1, true) then return true end
 end
@@ -1354,7 +1431,7 @@ end
 local function filterHome()
 local q = Win._query:lower()
 for _, g in ipairs(Win._groups) do
-local show = q == "" or g.title:lower():find(q, 1, true) ~= nil
+local show = q == "" or g.title:lower():find(q, 1, true) ~= nil or tr(g.title):lower():find(q, 1, true) ~= nil
 if not show then
 for _, t in ipairs(g.tabs) do
 if tabMatches(t, q) then
@@ -1386,8 +1463,8 @@ home.Visible = tab == nil
 menu.Visible = tab ~= nil
 backBtn.Visible = tab ~= nil
 lg.Visible = tab == nil
-titleL.Text = grp and (grp.emoji .. "  " .. grp.title) or homeTitle
-subL.Text = tab and ((pills and tab.title or grp.desc) or "") or author
+titleL.Text = grp and (grp.emoji .. "  " .. tr(grp.title)) or homeTitle
+subL.Text = tab and ((pills and tr(tab.title) or tr(grp.desc)) or "") or author
 if tab then
 tab:_filter(self._query)
 menu.Position = UDim2.fromOffset(0, 8)
@@ -1419,6 +1496,7 @@ Size = UDim2.fromOffset(0, 28), AutomaticSize = AUTO_X, BackgroundColor3 = K.car
 Text = tab.title, Font = FM, TextSize = 12, TextColor3 = K.sub, AutoButtonColor = false,
 BorderSizePixel = 0, LayoutOrder = tab.order,
 }, grp.pills)
+trSet(btn, tab.title)
 round(btn, 14)
 pad(btn, 14, 0, 14, 0)
 local page = mk("ScrollingFrame", {
@@ -1480,10 +1558,10 @@ Size = UDim2.fromOffset(36, 36), BackgroundColor3 = tint, BackgroundTransparency
 }, inner)
 round(tile, 10)
 text(tile, { Size = UDim2.fromScale(1, 1), Text = icon, TextSize = 20, TextXAlignment = CENTER })
-text(inner, {
+trSet(text(inner, {
 Position = UDim2.fromOffset(0, 41), Size = UDim2.new(1, 0, 0, 16), Font = FB, TextSize = 14,
 Text = grp.title, TextTruncate = Enum.TextTruncate.AtEnd,
-})
+}), grp.title)
 local sl = text(inner, {
 Position = UDim2.fromOffset(0, 58), Size = UDim2.new(1, 0, 0, 14), TextSize = 11, TextColor3 = K.sub,
 Text = grp.desc, TextTruncate = Enum.TextTruncate.AtEnd,
@@ -1494,6 +1572,7 @@ AutomaticSize = AUTO_X, BackgroundColor3 = K.ok, BackgroundTransparency = 0.82, 
 TextColor3 = K.ok, Text = T("Running", "JALAN"), TextXAlignment = CENTER, Visible = false,
 })
 round(run, 9)
+trSet(run, "JALAN")
 pad(run, 7, 0, 7, 0)
 local pills = mk("ScrollingFrame", {
 Size = UDim2.new(1, 0, 0, 30), BackgroundTransparency = 1, BorderSizePixel = 0, Visible = false,
@@ -1508,10 +1587,10 @@ grp.card, grp.pills = card, pills
 function grp:_refresh()
 if #self.tabs > 1 then
 local names = {}
-for _, t in ipairs(self.tabs) do names[#names + 1] = t.title end
+for _, t in ipairs(self.tabs) do names[#names + 1] = tr(t.title) end
 sl.Text = table.concat(names, " · ")
 else
-sl.Text = self.desc
+sl.Text = tr(self.desc)
 end
 end
 function grp:SetActive(on)
@@ -1523,6 +1602,7 @@ cst.Color = on and K.ok or K.line
 end
 function grp:Open() end
 function grp:Tab(tcfg) return Win:_newTab(tcfg, grp) end
+Lib._relang[#Lib._relang + 1] = function() grp:_refresh() end
 card.MouseEnter:Connect(function()
 tween(card, 0.12, { BackgroundColor3 = K.card2 })
 if not grp.active then cst.Color = K.accent end
@@ -1612,11 +1692,557 @@ regrid()
 end))
 end
 Win:Toggle(true)
+Lib._relang[#Lib._relang + 1] = function()
+if Win._active then Win:_select(Win._active) end
+end
 return Win
 end
 return Lib
 end)()
 WindUI.Logo = "https://raw.githubusercontent.com/SkyP-Hub/UI/main/file_00000000746c82078e410708d42d8bd6.png"
+WindUI.Dict = {
+["(belum ada item)"] = "(no items yet)",
+["(inventori belum terbaca)"] = "(inventory not read yet)",
+["(inventori kosong)"] = "(inventory empty)",
+["(memuat...)"] = "(loading...)",
+["(tidak ada item dengan nama itu)"] = "(no item with that name)",
+["(tulis nama item dulu)"] = "(type an item name first)",
+["1 pesan di Discord yang terus di-update: aktivitas, level, statistik, status. Script ditutup = OFFLINE"] = "1 Discord message that keeps updating: activity, level, statistics, status. Script closed = OFFLINE",
+["100 = tunggu semua pohon siap baru jalan. Kecil = lebih sering bolak-balik"] = "100 = wait for all trees to be ready. Lower = more back-and-forth",
+["100 WL -> 1 DL, 100 DL -> 1 BGL (sama seperti game)"] = "100 WL -> 1 DL, 100 DL -> 1 BGL (same as the game)",
+["15 = jeda 200 ms jadi 200 sampai 230 ms. Berlaku juga untuk Break Cepat"] = "15 = a 200 ms delay becomes 200 to 230 ms. Also applies to Fast Break",
+["200 = hanya saat penuh 1 slot"] = "200 = only when 1 slot is full",
+["ADMIN_KEY Worker. Disimpan hanya di perangkat ini (SkyP_Admin.txt), tidak ada di script"] = "Worker ADMIN_KEY. Saved only on this device (SkyP_Admin.txt), not in the script",
+["Abaikan pemain yang ada sekarang"] = "Ignore players present now",
+["Akhiri istirahat / reset waktu jalan"] = "End break / reset run time",
+["Aksi saat terdeteksi"] = "Action when detected",
+["Aktifkan Penjaga"] = "Enable Guard",
+["Alasan yang dilihat buyer saat script dimatikan"] = "The reason buyers see when the script is turned off",
+["Ambil dari"] = "Take from",
+["Ambil drop di semua tile grid (caranya ikut Mode collect)"] = "Collect drops on all grid tiles (method follows Collect mode)",
+["Ambil hasil panen di sekitar karakter"] = "Collect harvest drops around the character",
+["Ambil item dari vending, tas & drop di world ini"] = "Take items from vending, bag & drops in this world",
+["Animasi & suara"] = "Animation & sound",
+["Animasi aksi"] = "Action animation",
+["Antrian aksi"] = "Action queue",
+["Arah sapu"] = "Sweep direction",
+["Atas ke bawah / Bawah ke atas / Terdekat dulu (mulai dari ujung yang dekat karakter)"] = "Top to bottom / Bottom to top / Nearest first (starting from the end near the character)",
+["Atur titik drop"] = "Set drop point",
+["Auto Farm: tile dipukul bergantian (seperti 2 jari). Pakai Rayman's Fist = 2-3 tile segaris sekali pukul"] = "Auto Farm: tiles are punched alternately (like 2 fingers). With Rayman's Fist = 2-3 tiles in a line per punch",
+["Auto Recycle (buang item)"] = "Auto Recycle (discard items)",
+["Auto Rejoin pindah"] = "Auto Rejoin moved",
+["Auto collect tiap habis pecah"] = "Auto collect after each break",
+["Auto drop seed"] = "Auto drop seeds",
+["Auto execute (rejoin server)"] = "Auto execute (server rejoin)",
+["Baca alasan disconnect"] = "Read disconnect reason",
+["Batalkan tunggu / lanjut"] = "Cancel waiting / continue",
+["Batas FPS (mode ringan)"] = "FPS limit (light mode)",
+["Batas dirt"] = "Dirt limit",
+["Batas gali (% kedalaman world)"] = "Dig limit (% of world depth)",
+["Batas gali (Auto Clear biasa)"] = "Dig limit (normal Auto Clear)",
+["Batas macet (detik)"] = "Stuck limit (seconds)",
+["Batas rejoin per jam"] = "Rejoin limit per hour",
+["Batas waktu jalan"] = "Run time limit",
+["Batas waktu jalan (jam)"] = "Run time limit (hours)",
+["Belum ada. Buka peta untuk memilih"] = "None yet. Open the map to choose",
+["Belum dijalankan. Masuk ke world dulu, lalu tekan tombol di bawah"] = "Not run yet. Enter a world first, then tap the button below",
+["Berapa lama tanpa data dari server baru dianggap macet"] = "How long without server data before it counts as stuck",
+["Berdiri di satu titik: panen semua pohon siap dalam jangkauan, lalu tanam semua tile kosong. Pakai lahan kecil di sekitar karakter + seed cepat tumbuh. Drop diambil collector (paling cocok mode Remote)"] = "Stand at one spot: harvest all ready trees in reach, then plant all empty tiles. Use a small plot around the character + fast-growing seeds. Drops are taken by the collector (best with Remote mode)",
+["Berdiri di tempat drop (boleh di world lain), lalu tekan"] = "Stand at the drop spot (can be another world), then tap",
+["Berdiri di tempat drop (boleh di world titik drop), lalu tekan. Dipakai mode isi stock & kosongkan"] = "Stand at the drop spot (can be in the drop point world), then tap. Used by restock & empty-out modes",
+["Berhenti & pungut"] = "Stop & collect",
+["Berhenti kalau level sudah segini"] = "Stop when this level is reached",
+["Berhenti setelah N world (0 = tanpa batas)"] = "Stop after N worlds (0 = no limit)",
+["Berlaku untuk semua fitur. Sentuhan = seperti main manual. Remote = ambil dari jauh (cara lama, cepat). Jemput = tanpa Remote, karakter jalan sendiri mengambil drop di sekitar (nyalakan Collect di sekitar karakter)"] = "Applies to all features. Touch = like playing manually. Remote = collect from a distance (old method, fast). Fetch = no Remote, the character walks to nearby drops (turn on Collect around character)",
+["Bersihkan dari baris atas ke bawah"] = "Clear from the top row down",
+["Bersihkan sisi kiri & kanan, pasang platform (tangga), gali, ganti lava dengan dirt, lalu susun baris dirt (y 22, 20, ... 2) sambil farm Dirt Seed kalau dirt habis. Butuh 52 platform (Wooden Platform atau sejenisnya)"] = "Clear the left & right sides, place platforms (stairs), dig, replace lava with dirt, then build dirt rows (y 22, 20, ... 2) while farming Dirt Seed when dirt runs out. Needs 52 platforms (Wooden Platform or similar)",
+["Besar jeda acak (%)"] = "Random delay size (%)",
+["Bisa juga lewat tombol START di Grid"] = "Can also use the START button in Grid",
+["Bisa pilih banyak. Daftar: isi tas + drop di world ini (buka di world asal lalu Refresh)"] = "Multiple choice. List: bag + drops in this world (open in the source world then Refresh)",
+["Bisa pilih banyak. Kosong = semua item. Daftar: isi vending, tas & drop yang terlihat"] = "Multiple choice. Empty = all items. List: vending contents, bag & visible drops",
+["Bisa pilih banyak. Seed tanam selalu dijemput. Yang tersentuh badan tetap terambil"] = "Multiple choice. The planting seed is always fetched. Touched drops are still collected",
+["Bisa pilih banyak. Tool & lock tidak ditampilkan"] = "Multiple choice. Tools & locks are not shown",
+["Block & lainnya"] = "Blocks & others",
+["Block habis: ambil block yang tersedia di sekitar, lalu lanjut"] = "Out of blocks: pick up nearby blocks, then continue",
+["Block pijakan"] = "Stepping block",
+["Block yang dipakai untuk pijakan"] = "Block used for stepping",
+["Block-nya otomatis (contoh: Dirt Seed -> Dirt)"] = "Its block is automatic (example: Dirt Seed -> Dirt)",
+["Boleh beda dengan webhook di tab Discord"] = "Can differ from the webhook in the Discord tab",
+["Break Cepat"] = "Fast Break",
+["Break Kilat (1 block secepatnya)"] = "Instant Break (1 block as fast as possible)",
+["Break otomatis"] = "Auto break",
+["Break saja"] = "Break only",
+["Break secepat batas server selama pabrik jalan"] = "Break at the server limit while the factory runs",
+["Break secepat batas server, tanpa jeda terbuang"] = "Break at the server limit, no wasted delay",
+["Buat key baru"] = "Create new keys",
+["Buat key trial (2 jam)"] = "Create trial keys (2 hours)",
+["Buat pesan live baru"] = "Create new live message",
+["Buka Grid Tile"] = "Open Tile Grid",
+["Buka Staff Backpack"] = "Open Staff Backpack",
+["Buka kunci sesi"] = "Unlock session",
+["Buka peta"] = "Open map",
+["Bukan 1 hit: tiap block dipukul beruntun tanpa jeda terbuang sampai pecah, tepat di batas server. Sekali tekan = Break Cepat nyala, jeda pukul 200 ms, fokus 1 block"] = "Not 1 hit: each block is punched back-to-back with no wasted delay until it breaks, right at the server limit. One tap = Fast Break on, 200 ms punch delay, focus on 1 block",
+["Cabut key (hapus permanen)"] = "Revoke key (delete permanently)",
+["Cadangan kalau level tidak terbaca"] = "Fallback if the level can't be read",
+["Cara cepat: berdiri di tempat break lalu tekan (tile break bisa diubah di peta)"] = "Quick way: stand at the break spot then tap (break tiles can be changed on the map)",
+["Cara kerja"] = "How it works",
+["Cara pakai"] = "How to use",
+["Cara pungut hasil panen"] = "How to collect harvest",
+["Cari angka level di game. Hasil tampil di bawah & disalin ke clipboard (tempel ke developer)"] = "Look for the level number in the game. Result shows below & is copied to clipboard (paste to the developer)",
+["Cari fitur..."] = "Search features...",
+["Cari item"] = "Search item",
+["Cari nama item"] = "Search item name",
+["Cari..."] = "Search...",
+["Cek apakah script bisa di-queue untuk jalan lagi setelah teleport"] = "Check whether the script can be queued to run again after teleport",
+["Cek code sekarang"] = "Check codes now",
+["Cek data visual"] = "Check visual data",
+["Cek level"] = "Check level",
+["Cek level & laporan XP"] = "Check level & XP report",
+["Cek quest sekarang"] = "Check quests now",
+["Channel Discord > Edit > Integrasi > Webhook > Salin URL"] = "Discord channel > Edit > Integrations > Webhooks > Copy URL",
+["Clear world sekarang dulu"] = "Clear the current world first",
+["Coba lagi tile yang tadi gagal"] = "Retry tiles that failed earlier",
+["Collect di sekitar karakter"] = "Collect around character",
+["Contoh 1.7. Versi di bawahnya ditolak. Kosongkan = tidak ada batas"] = "Example 1.7. Older versions are rejected. Empty = no limit",
+["Contoh 200"] = "Example 200",
+["Contoh: game baru update, tunggu versi baru"] = "Example: the game just updated, wait for a new version",
+["Contoh: update v1.8 sudah rilis, jalankan ulang loader"] = "Example: update v1.8 is out, run the loader again",
+["Contoh: wings, cape, halo, dragon"] = "Example: wings, cape, halo, dragon",
+["Daftar"] = "List",
+["Daftar pesan"] = "Message list",
+["Darurat & versi"] = "Emergency & version",
+["Depan"] = "Front",
+["Detail status"] = "Detailed status",
+["Detail tiap menu"] = "Details of each menu",
+["Di-tag kalau rejoin gagal / dihentikan, supaya ada notifikasi di HP. Kosong = tanpa tag"] = "Tagged when rejoin fails / stops, so your phone gets notified. Empty = no tag",
+["Diacak ±20%"] = "Randomized ±20%",
+["Diacak ±20% supaya tidak selalu sama"] = "Randomized ±20% so it's not always the same",
+["Diagnosa referensi (kalau 'Hubungkan ke game' gagal)"] = "Reference diagnosis (if 'Connect to game' fails)",
+["Diam semua aktivitas"] = "Pause all activities",
+["Dibanding laju terbaik di world yang sama. 0 = mati"] = "Compared to the best rate in the same world. 0 = off",
+["Dihitung hanya saat ada aktivitas. Diam 15 menit = hitungan mulai lagi"] = "Counted only while something is running. Idle 15 minutes = count restarts",
+["Dinilai setelah 90 dtk di world, laju rendah harus bertahan 20 dtk. 0 = mati"] = "Judged after 90 s in the world, the low rate must last 20 s. 0 = off",
+["Dipakai kalau 'Pukul: TIDAK'. 0 = otomatis"] = "Used when 'Punch: NO'. 0 = automatic",
+["Dipakai kalau URL kosong. Simpan script ini di folder workspace executor"] = "Used when the URL is empty. Save this script in the executor's workspace folder",
+["Dipakai kalau world tujuan tidak bisa dimasuki. Pisah dengan koma"] = "Used if the target world can't be entered. Separate with commas",
+["Dipakai saat Smooth / Blank nyala. Makin rendah makin ringan, tapi di bawah 20 farm ikut melambat"] = "Used while Smooth / Blank is on. Lower is lighter, but below 20 farming slows down too",
+["Dirt Farm (tahap, info, log)"] = "Dirt Farm (stages, info, log)",
+["Disconnect dari server"] = "Disconnected from server",
+["Drop / tunggu di titik kedatangan (pintu) saja"] = "Drop / wait at the arrival spot (door) only",
+["Drop di luar jangkauan Remote tapi dalam radius: karakter jalan mendekat lalu balik. Hanya saat tidak ada fitur lain yang menggerakkan karakter"] = "Drops outside Remote reach but inside the radius: the character walks over and comes back. Only when no other feature is moving the character",
+["Drop di sekitar disusuri sampai tersentuh badan (tanpa remote)"] = "Nearby drops are walked over until touched (no remote)",
+["Drop di tempat datang (pintu)"] = "Drop at the arrival spot (door)",
+["Drop di titik kedatangan (pintu) saja"] = "Drop at the arrival spot (door) only",
+["Drop kalau seed sudah"] = "Drop when seeds reach",
+["Drop seed"] = "Drop seeds",
+["Drop seed (level 10 ke atas)"] = "Drop seeds (level 10 and up)",
+["Drop yang dijemput"] = "Drops to fetch",
+["Ekstra"] = "Extra",
+["Farm (place & break), Clear World & Farmer: aksi dijadwal tepat di batas jeda, waktu proses tidak menambah jeda, jeda setelah block pecah dilewati. Tidak pernah lebih cepat dari batas server. Matikan kalau ada masalah"] = "Farm (place & break), Clear World & Farmer: actions are scheduled right at the delay limit, processing time doesn't add delay, the delay after a block breaks is skipped. Never faster than the server limit. Turn off if there are problems",
+["Farm Diam (tidak jalan)"] = "Stand Farm (no walking)",
+["Farm Dirt Seed berhenti dan kembali menyusun kalau dirt di tas sudah sebanyak ini (tas maksimal 200)"] = "Farming Dirt Seed stops and building resumes when dirt in the bag reaches this amount (bag max 200)",
+["Farming otomatis penuh"] = "Fully automatic farming",
+["File script lokal (cadangan)"] = "Local script file (backup)",
+["Fly + Tembus Block"] = "Fly + Noclip",
+["Gali sampai sebagian kedalaman saja, tidak sampai lapisan lava. Auto Leveling selalu pakai batas ini"] = "Dig only part of the depth, not down to the lava layer. Auto Leveling always uses this limit",
+["Game diam tanpa layar error (tidak ada data dari server): dianggap disconnect"] = "Game frozen with no error screen (no data from the server): treated as disconnected",
+["Game tidak mengirim angka level ke HP. Isi sekali, naik level berikutnya dihitung otomatis (event levelUp). 0 = belum tahu"] = "The game does not send the level number to the phone. Fill it once, later level-ups are counted automatically (levelUp event). 0 = unknown",
+["HP ringan"] = "Light phone",
+["Hanya item yang bisa di-place"] = "Only placeable items",
+["Hanya membaca data game (tidak mengubah apa pun)"] = "Only reads game data (changes nothing)",
+["Hanya pilihan manual di world ini (Full world tidak terpengaruh)"] = "Only manual picks in this world (Full world is not affected)",
+["Hanya pohon yang sudah siap"] = "Only trees that are ready",
+["Hanya seed yang ada di inventori"] = "Only seeds in the inventory",
+["Hapus data jarak, mulai hitung dari nol"] = "Delete distance data, start counting from zero",
+["Hapus file config, lalu execute ulang"] = "Delete the config file, then execute again",
+["Hapus pengumuman"] = "Delete announcement",
+["Hapus pilihan item"] = "Clear item selection",
+["Hapus pilihan lantai"] = "Clear floor selection",
+["Hapus posisi drop"] = "Clear drop position",
+["Hapus posisi drop vending"] = "Clear vending drop position",
+["Hapus titik & tile break. Saat pabrik mulai, tempat break dicari sendiri"] = "Clear break point & tiles. When the factory starts, a break spot is found automatically",
+["Hasil"] = "Result",
+["Hasil Cek level"] = "Check level result",
+["Hasil cari"] = "Search results",
+["Hasil diagnosa"] = "Diagnosis result",
+["Hasil ukur"] = "Measurement result",
+["Hentikan proses keluar-masuk & lanjut otomatis"] = "Stop the leave-rejoin process & auto continue",
+["Hindari pemain lain"] = "Avoid other players",
+["Hubungkan ke game"] = "Connect to game",
+["Info World"] = "World Info",
+["Info key"] = "Key info",
+["Interval (detik)"] = "Interval (seconds)",
+["Isi & kosongkan stock"] = "Restock & empty stock",
+["Isi 1 / -1 kalau tile meleset"] = "Set 1 / -1 if tiles are off",
+["Isi Admin key, lalu pilih aksi. Tab ini hanya muncul di key admin"] = "Fill in the Admin key, then choose an action. This tab only shows for admin keys",
+["Isi pengumuman"] = "Announcement text",
+["Isi tas saja"] = "Bag only",
+["Istirahat berkala"] = "Periodic breaks",
+["Istirahat tiap (menit jalan)"] = "Break every (minutes running)",
+["Item baju ditaruh paling atas"] = "Clothing items are listed first",
+["Item di 'Hasil cari' yang sedang dipakai sebagai visual"] = "The item in 'Search results' that is currently worn as a visual",
+["Item visual (hanya kamu yang lihat)"] = "Item visual (only you can see)",
+["Item yang di-recycle"] = "Items to recycle",
+["Item yang diambil"] = "Items to take",
+["Item yang dipilih di 'Hasil cari'"] = "The item selected in 'Search results'",
+["Item yang dipilih di-recycle otomatis"] = "Selected items are recycled automatically",
+["Item yang dipindah"] = "Items to move",
+["JALAN"] = "RUNNING",
+["Jalankan"] = "Run",
+["Jalankan Farmer"] = "Run Farmer",
+["Jalankan Pabrik"] = "Run Factory",
+["Jalankan Vending"] = "Run Vending",
+["Jalankan di world vending milikmu"] = "Run in your own vending world",
+["Jalankan diagnosa"] = "Run diagnosis",
+["Jangkauan Remote (tile)"] = "Remote reach (tiles)",
+["Jarak ambil drop (ukur batas server)"] = "Drop pickup distance (measure server limit)",
+["Jarak ambil drop di sekitar karakter (tile)"] = "Pickup distance around the character (tiles)",
+["Jarak cari block (tile)"] = "Block search distance (tiles)",
+["Jarak maksimal permintaan Remote. Drop yang lebih jauh tidak ditembak (ditolak server), tapi dijemput"] = "Max distance for Remote requests. Farther drops are not requested (server rejects them) but fetched on foot",
+["Jeda acak"] = "Random delay",
+["Jeda antar pesan (min 3 detik)"] = "Delay between messages (min 3 seconds)",
+["Jeda sebelum masuk lagi (detik)"] = "Delay before rejoining (seconds)",
+["Jeda sebelum pindah (detik)"] = "Delay before moving (seconds)",
+["Jeda setelah hancur (ms)"] = "Delay after break (ms)",
+["Jeda setelah tiap panen"] = "Delay after each harvest",
+["Jeda setelah tiap place"] = "Delay after each place",
+["Jeda setelah tiap tanam seed"] = "Delay after each seed planted",
+["Jeda tanam / splice (ms)"] = "Plant / splice delay (ms)",
+["Jeda tiap percobaan (detik)"] = "Delay per attempt (seconds)",
+["Jeda tiap pukulan (normal 220). Dipakai juga Clear"] = "Delay per punch (normal 220). Also used by Clear",
+["Jemput"] = "Fetch",
+["Jemput drop yang jauh"] = "Fetch far drops",
+["Jumlah ikut slider di atas (maks 20). Waktu mulai dihitung saat pertama dipakai. Jeda 2 hari per device & akun"] = "Amount follows the slider above (max 20). Time starts at first use. 2-day cooldown per device & account",
+["Jumlah key baru"] = "Number of new keys",
+["Jumlah koridor galian (dihitung dari bawah) yang ditanami Dirt Seed. 1 koridor = 96 pohon"] = "Number of dug corridors (counted from the bottom) planted with Dirt Seed. 1 corridor = 96 trees",
+["Jumlah tile yang dipukul sekali berdiri saat menggali"] = "Number of tiles punched per standing spot while digging",
+["Jumlah yang tidak ikut di-recycle"] = "Amount not recycled",
+["KODE"] = "CODE",
+["Kalau Dirt Seed DAN Cave Background Seed sudah sebanyak 'Minimal tiap seed': pergi ke world splice, panen pohon hasil splice yang sudah siap, lalu tanam Dirt Seed + splice Cave Background Seed sampai seed / tempat habis. Pohon yang belum siap ditinggal, dipanen di kunjungan berikutnya. World splice harus milik sendiri & sudah ada baris block untuk tempat tanam"] = "When Dirt Seed AND Cave Background Seed both reach 'Minimum per seed': go to the splice world, harvest spliced trees that are ready, then plant Dirt Seed + splice Cave Background Seed until seeds / space run out. Trees not ready yet are left and harvested on the next visit. The splice world must be your own & already have block rows to plant on",
+["Kalau berada di luar world (layar pilih world), masuk lagi otomatis"] = "When outside a world (world select screen), re-enter automatically",
+["Kalau buyer tertolak 'sedang dipakai di tempat lain' padahal itu dia sendiri"] = "When a buyer is rejected 'in use elsewhere' but it's really them",
+["Kalau nama / bendera di atas karakter masih salah: tekan ini saat di dalam world, lalu kirim hasilnya ke developer"] = "If the name / flag above the character is still wrong: tap this inside a world, then send the result to the developer",
+["Kapan rejoin"] = "When to rejoin",
+["Karakter"] = "Character",
+["Ke titik drop (tab Titik Drop). Dilakukan di antara fase, tidak di tengah rute"] = "To the drop point (Drop Point tab). Done between phases, not in the middle of a route",
+["Keamanan"] = "Security",
+["Keamanan tambahan"] = "Extra security",
+["Kecepatan"] = "Speed",
+["Kedalaman gali (%)"] = "Dig depth (%)",
+["Keliling world (A*)"] = "Roam the world (A*)",
+["Kelola key"] = "Manage keys",
+["Keluar lalu masuk lagi, aktivitas dilanjutkan"] = "Leave then re-enter, activities continue",
+["Keluar world"] = "Leave world",
+["Keluar world: masuk lagi, cek, lalu lanjut aktivitas sebelumnya"] = "Leave world: re-enter, check, then resume the previous activity",
+["Kembali ke baju asli"] = "Back to real clothes",
+["Kembali ke posisi awal farm (posisi saat START) setelah refill / drop / bergeser"] = "Return to the farm start position (position at START) after refill / drop / moving",
+["Kembali ke semua item"] = "Back to all items",
+["Ketik code lalu tekan Enter"] = "Type a code then press Enter",
+["Key buyer"] = "Buyer key",
+["Key yang aktif dalam 21 menit terakhir"] = "Keys active in the last 21 minutes",
+["Key yang dicoba dari IP & akun lain saat masih dipakai (7 hari terakhir)"] = "Keys tried from another IP & account while in use (last 7 days)",
+["Key yang dicurigai dibagi"] = "Keys suspected of sharing",
+["Key yang mau dicek / reset / dicabut"] = "Key to check / reset / revoke",
+["Kiri → Kanan"] = "Left → Right",
+["Kirim 1 pesan sekarang"] = "Send 1 message now",
+["Kirim kabar penting ke channel Discord kamu"] = "Send important updates to your Discord channel",
+["Kirim ke Discord sekarang"] = "Send to Discord now",
+["Kirim notifikasi terlempar / disconnect / masuk lagi ke Discord"] = "Send kicked / disconnected / rejoined notifications to Discord",
+["Kirim pengumuman"] = "Send announcement",
+["Kirim pesan bergantian sesuai urutan"] = "Send messages in turn, in order",
+["Kirim statistik sesi tiap X menit. 0 = mati"] = "Send session statistics every X minutes. 0 = off",
+["Klaim hadiah quest yang sudah selesai"] = "Claim rewards of completed quests",
+["Koneksi"] = "Connection",
+["Koneksi macet (watchdog)"] = "Connection stuck (watchdog)",
+["Kontrol"] = "Controls",
+["Koreksi posisi"] = "Position correction",
+["Koreksi posisi X"] = "Position correction X",
+["Koreksi posisi Y"] = "Position correction Y",
+["Koridor untuk farm"] = "Farming corridors",
+["Kosong = pakai URL webhook utama. Bisa channel lain khusus live"] = "Empty = use the main webhook URL. Can be a separate live channel",
+["Kosong = world ini | WORLD | WORLD:ID (masuk lewat pintu ID)"] = "Empty = this world | WORLD | WORLD:ID (enter through door ID)",
+["Kosong = world ini | WORLD | WORLD:ID (pintu)"] = "Empty = this world | WORLD | WORLD:ID (door)",
+["Kosongkan = world terakhir yang kamu masuki"] = "Empty = the last world you entered",
+["Kotak 5x5, tengah = karakter"] = "5x5 grid, center = character",
+["Lainnya"] = "Others",
+["Lama istirahat (menit)"] = "Break length (minutes)",
+["Langsung keluar world saat terdeteksi"] = "Leave the world right away when detected",
+["Lanjut otomatis setelah aman"] = "Continue automatically when safe",
+["Lanjutan"] = "Advanced",
+["Lantai tanam & break (peta)"] = "Planting floors & break (map)",
+["Laporan XP"] = "XP Report",
+["Laporan statistik (menit)"] = "Statistics report (minutes)",
+["Layar error Roblox: teleport ulang ke game lalu masuk world terakhir"] = "Roblox error screen: teleport back to the game then enter the last world",
+["Lebih dari ini dalam 1 jam = Auto Rejoin berhenti (kemungkinan sengaja di-kick)"] = "More than this within 1 hour = Auto Rejoin stops (probably kicked on purpose)",
+["Lepas item yang dipilih"] = "Remove selected item",
+["Lepas semua visual"] = "Remove all visuals",
+["Level sekarang"] = "Current level",
+["Level target"] = "Target level",
+["Lewat dari ini langsung pindah world"] = "After this, move to another world right away",
+["Lewati block lebih dari N pukulan"] = "Skip blocks needing more than N hits",
+["Lihat pengaturan server"] = "View server settings",
+["Link raw script ini, supaya jalan lagi setelah teleport. Kosong = pakai autoexec"] = "Raw link of this script, so it runs again after teleport. Empty = use autoexec",
+["Lokasi drop (world)"] = "Drop location (world)",
+["Lompat di udara (bisa kena rollback)"] = "Jump in mid-air (may rubber-band)",
+["MATIKAN SkyP untuk semua buyer"] = "TURN OFF SkyP for all buyers",
+["Maks menit per world"] = "Max minutes per world",
+["Maksimal 190 (batas aman tas). Contoh 190 & sisakan 50 = drop 140"] = "Max 190 (safe bag limit). Example 190 & keep 50 = drop 140",
+["Maksimal 300 huruf. Muncul sebagai notifikasi di script semua buyer (paling lama 2 menit)"] = "Max 300 characters. Shows as a notification in every buyer's script (within 2 minutes)",
+["Masuk lagi & lanjut aktivitas kalau terlempar, disconnect, macet, atau Roblox crash"] = "Rejoin & resume activity when kicked, disconnected, stuck, or Roblox crashes",
+["Masuk world acak (nama 5+ huruf), clear sampai batas gali, lalu pindah world lain. Berhenti di level target"] = "Join random worlds (5+ letter names), clear down to the dig limit, then move to another world. Stops at the target level",
+["Masuk world lagi setelah (detik)"] = "Re-enter world after (seconds)",
+["Mati"] = "Off",
+["Mati = 1 baris ringkas. Nyala = rincian lengkap di bawahnya"] = "Off = 1 short line. On = full details below it",
+["Mati = langsung pindah ke world acak (aman: world sendiri tidak ikut dipecah)"] = "Off = go straight to a random world (safe: your own world is not broken)",
+["Mati = seed dibiarkan menumpuk"] = "Off = seeds keep piling up",
+["Matikan particle & suara (HP low-end)"] = "Turn off particles & sound (low-end phones)",
+["Memakai rute /gen yang sudah ada. Hasilnya disalin ke clipboard"] = "Uses the existing /gen route. The result is copied to clipboard",
+["Minimal 10 detik (batas Discord)"] = "Minimum 10 seconds (Discord limit)",
+["Minimal tiap seed"] = "Minimum per seed",
+["Mode Lantai: ketuk lantai tempat pohon ditanam. Mode Berdiri / Tile break: atur break. Tersimpan per world"] = "Floor mode: tap the floors where trees are planted. Stand / Break tile mode: set up breaking. Saved per world",
+["Mode Remote: ambil semua drop dalam radius, kapan saja. Mode Jemput: didatangi dengan berjalan"] = "Remote mode: collect all drops in radius, any time. Fetch mode: walk to them",
+["Mode collect"] = "Collect mode",
+["Mode ringan"] = "Light mode",
+["Muat ulang daftar item"] = "Reload item list",
+["Mulai hitung dari nol"] = "Start counting from zero",
+["Mulai hitung dari nol (level yang sedang berjalan tidak dihitung sampai naik level berikutnya)"] = "Start counting from zero (the current level is not counted until the next level-up)",
+["Mulai level 'Splice hanya di bawah level': kalau Dirt / Cave Background Seed sudah banyak, pergi ke world drop, drop di titik kedatangan, lalu lanjut leveling"] = "From the 'Splice only below level' level: when Dirt / Cave Background Seed pile up, go to the drop world, drop at the arrival spot, then continue leveling",
+["Mulai level ini seed bisa di-drop, splice berhenti"] = "From this level seeds can be dropped, splice stops",
+["Mulai panen saat pohon siap (%)"] = "Start harvesting when trees are ready (%)",
+["Multi target break"] = "Multi-target break",
+["Mute suara pukulan"] = "Mute punch sound",
+["NAMAWORLD"] = "WORLDNAME",
+["Nama akun di semua webhook disamarkan, contoh: Ra******"] = "Account name is masked in all webhooks, example: Ra******",
+["Nama world di semua webhook (notifikasi, rejoin, live) diganti [world]"] = "World name in all webhooks (notifications, rejoin, live) is replaced with [world]",
+["Nama world: huruf maksimal"] = "World name: max letters",
+["Nama world: huruf minimal"] = "World name: min letters",
+["Notifikasi Discord"] = "Discord notifications",
+["Nyala: jalan ke seluruh world. Mati: hanya tile Grid 5x5"] = "On: walk the whole world. Off: only the 5x5 Grid tiles",
+["Nyalakan lagi"] = "Turn back on",
+["Observasi"] = "Observation",
+["Opsi"] = "Options",
+["Opsional (di world tujuan). Sekarang: "] = "Optional (in the target world). Now: ",
+["Otomatis"] = "Automatic",
+["Otomatis (pintar)"] = "Automatic (smart)",
+["Pabrik"] = "Factory",
+["Pakai Role"] = "Use Role",
+["Pakai block pijakan"] = "Use stepping blocks",
+["Pakai posisi sekarang untuk drop"] = "Use current position for dropping",
+["Pakai setelah pindah world"] = "Use after changing worlds",
+["Pakai visual"] = "Wear visual",
+["Panen & tanam"] = "Harvest & plant",
+["Panen + tanam mengikuti rute lantai pilihanmu, lalu break. Seed lebihan di-drop"] = "Harvest + plant along your chosen floor route, then break. Extra seeds are dropped",
+["Panen / tanam / di-drop kembali ke 0"] = "Harvest / plant / dropped back to 0",
+["Panen pohon hasil splice"] = "Harvest spliced trees",
+["Panen pohon siap & tanam seed otomatis"] = "Harvest ready trees & plant seeds automatically",
+["Pantau"] = "Monitor",
+["Pantau Mod / Dev / pemain yang masuk world"] = "Watch Mods / Devs / players entering the world",
+["Pengaman"] = "Safeguards",
+["Pengaturan"] = "Settings",
+["Pengaturan & koneksi"] = "Settings & connection",
+["Pengaturan Auto Rejoin sekarang ada di menu Keamanan > Auto Rejoin"] = "Auto Rejoin settings are now in Security > Auto Rejoin",
+["Pengumuman"] = "Announcement",
+["Penjaga"] = "Guard",
+["Penjaga, staff & rejoin"] = "Guard, staff & rejoin",
+["Perbarui semua panel di tab ini satu kali"] = "Refresh all panels in this tab once",
+["Perbarui tab ini tiap 1 detik. Matikan kalau terasa berat"] = "Refresh this tab every 1 second. Turn off if it feels heavy",
+["Pergi splice kalau KEDUA seed sudah sebanyak ini (maks 200 per item)"] = "Go splice when BOTH seeds reach this amount (max 200 per item)",
+["Peringatan"] = "Warnings",
+["Perlu webhook di tab Discord"] = "Needs a webhook in the Discord tab",
+["Persen jarak permukaan tanah -> lava/bedrock pertama. 50 = setengah. Selalu sisa >= 3 baris di atas lava"] = "Percent of the distance from ground surface to the first lava/bedrock. 50 = half. Always leaves >= 3 rows above lava",
+["Pesan"] = "Messages",
+["Pesan lama dibiarkan, update berikutnya ke pesan baru"] = "The old message is left, next updates go to the new message",
+["Pesan tombol darurat"] = "Emergency switch message",
+["Pilih Block"] = "Choose Block",
+["Pilih item"] = "Choose items",
+["Pilih item di tas game (dipegang), lalu tekan. Masuk ke daftar item yang diambil"] = "Select an item in the game bag (held), then tap. It's added to the item list",
+["Pilih..."] = "Choose...",
+["Pilihan world ini"] = "This world's selection",
+["Pindah Item"] = "Move Items",
+["Pindah kalau laju di bawah % terbaik"] = "Move if rate is below % of best",
+["Pindah kalau laju di bawah (pecah/menit)"] = "Move if rate is below (breaks/minute)",
+["Pintar (kecepatan)"] = "Smart (speed)",
+["Pisahkan dengan |   contoh: halo|jual dirt"] = "Separate with |   example: hello|selling dirt",
+["Place + Break / Break saja / Place saja"] = "Place + Break / Break only / Place only",
+["Place saja"] = "Place only",
+["Pohon (siap panen)"] = "Trees (ready to harvest)",
+["Pohon hasil splice yang sudah siap dipanen dulu tiap kunjungan (tambah XP). Hasil panen dibiarkan di tas"] = "Ready spliced trees are harvested first on each visit (extra XP). Harvest results stay in the bag",
+["Pohon yang siap dalam X dtk ikut dituju: sampai pas siap, tidak bolak-balik. 0 = hanya yang sudah siap"] = "Trees ready within X s are targeted too: arrive just as they're ready, no back-and-forth. 0 = only ready trees",
+["Privasi"] = "Privacy",
+["Pukulan & block pecah per jenis block dan per level. Tampil di bawah & disalin ke clipboard (tempel ke developer)"] = "Hits & broken blocks per block type and per level. Shows below & is copied to clipboard (paste to the developer)",
+["Pukulan per block (cadangan)"] = "Hits per block (fallback)",
+["Pungut drop secukupnya"] = "Only pick up useful drops",
+["Pungut item di world asal -> drop di world tujuan -> ulang sampai habis. Akun harus level 10+ (drop)"] = "Pick up items in the source world -> drop in the target world -> repeat until done. Account must be level 10+ (drop)",
+["Quest Harian"] = "Daily Quests",
+["Radius ambil (tile)"] = "Pickup radius (tiles)",
+["Radius collect (mode Remote)"] = "Collect radius (Remote mode)",
+["Recycle kalau jumlah >="] = "Recycle when amount >=",
+["Redeem code manual"] = "Redeem code manually",
+["Referensi game"] = "Game references",
+["Refresh daftar"] = "Refresh list",
+["Refresh daftar item"] = "Refresh item list",
+["Refresh daftar role"] = "Refresh role list",
+["Refresh daftar seed"] = "Refresh seed list",
+["Rejoin world sekarang"] = "Rejoin world now",
+["Reset hitungan hasil"] = "Reset result counters",
+["Reset key (lepas device)"] = "Reset key (unbind device)",
+["Reset pengukur XP"] = "Reset XP meter",
+["Reset statistik"] = "Reset statistics",
+["Reset tile yang dilewati"] = "Reset skipped tiles",
+["Reset ukur"] = "Reset measurement",
+["Ringkasan semua menu"] = "Summary of all menus",
+["Rute & panen"] = "Route & harvest",
+["Salah satu seed sebanyak ini -> pergi drop (maks 200 per item)"] = "Either seed reaches this amount -> go drop (max 200 per item)",
+["Salin laporan"] = "Copy report",
+["Salin semua isi observasi jadi satu teks (kirim ke developer kalau ada masalah)"] = "Copy all observation data as one text (send to the developer if there's a problem)",
+["Salin struktur nametag"] = "Copy nametag structure",
+["Sama dengan Batas gali di tab Clear World. 50 = setengah world (tidak sampai lapisan lava)"] = "Same as Dig limit in the Clear World tab. 50 = half the world (not down to the lava layer)",
+["Sama seperti link reset: key bisa dipakai di device baru"] = "Same as the reset link: the key can be used on a new device",
+["Sama seperti menu Title game"] = "Same as the game's Title menu",
+["Sambil jalan"] = "While moving",
+["Sambil jalan = tidak berhenti, yang terjangkau / tersentuh terambil (paling cepat). Berhenti & pungut = cara lama: susuri baris dulu sebelum tanam"] = "While moving = no stopping, reachable / touched drops are collected (fastest). Stop & collect = old way: walk the row first before planting",
+["Saring nama item (kosongkan = semua)"] = "Filter item name (empty = all)",
+["Scan memori game ±beberapa detik (layar bisa tersendat sebentar). Hasilnya ikut masuk ke 'Salin laporan'"] = "Scans game memory for a few seconds (the screen may stutter briefly). The result is included in 'Copy report'",
+["Scan sekarang"] = "Scan now",
+["Sedang istirahat: langsung lanjut. Selain itu: hitungan waktu jalan kembali ke 0"] = "On a break: continue right away. Otherwise: run time count goes back to 0",
+["Seed A (ditanam)"] = "Seed A (planted)",
+["Seed B (di-splice)"] = "Seed B (spliced)",
+["Seed hasil break di-drop otomatis kalau sudah mencapai jumlah di bawah"] = "Seeds from breaking are dropped automatically once they reach the amount below",
+["Seed pabrik"] = "Factory seed",
+["Seed untuk ditanam"] = "Seed to plant",
+["Segarkan sekarang"] = "Refresh now",
+["Sekitar posisi"] = "Around position",
+["Selalu kembali ke world"] = "Always return to world",
+["Seluruh world"] = "Whole world",
+["Seluruh world = semua drop item terpilih. Sekitar posisi = hanya di sekitar titik yang di-set. Isi tas saja = bawa isi tas"] = "Whole world = all drops of the chosen items. Around position = only around the set spot. Bag only = carry what's in the bag",
+["Sembunyikan nama akun"] = "Hide account name",
+["Sembunyikan nama world"] = "Hide world name",
+["Semua"] = "All",
+["Semua aktivitas berhenti total setelah jalan sekian jam (ada notifikasi Discord)"] = "All activities stop completely after running this many hours (Discord notification)",
+["Semua aktivitas dijeda sebentar tiap sekian menit, lalu lanjut sendiri (Vending tidak ikut)"] = "All activities pause briefly every few minutes, then continue on their own (Vending excluded)",
+["Semua lantai di world dipakai otomatis (tidak perlu pilih di peta). Pilihan manualmu tetap tersimpan"] = "All floors in the world are used automatically (no need to pick on the map). Your manual picks stay saved",
+["Semua pemain"] = "All players",
+["Semua pemain: yang sudah ada saat dinyalakan diabaikan"] = "All players: those already present when turned on are ignored",
+["Sentuhan"] = "Touch",
+["Sesi ini"] = "This session",
+["Set posisi ambil = posisi sekarang"] = "Set pickup position = current position",
+["Set posisi drop = posisi sekarang"] = "Set drop position = current position",
+["Setelah 6x gagal berturut-turut otomatis melambat jadi 30 detik"] = "After 6 failures in a row it slows down to 30 seconds",
+["Setelan"] = "Settings",
+["Siapa yang online"] = "Who's online",
+["Simpan config sekarang"] = "Save config now",
+["Simpan pengaturan otomatis, dimuat lagi saat execute"] = "Save settings automatically, loaded again on execute",
+["Simpan posisi drop vending (posisi karakter)"] = "Save vending drop position (character position)",
+["Simpan posisi karakter sebagai lokasi drop"] = "Save character position as drop location",
+["Simpan versi minimum"] = "Save minimum version",
+["Sisakan"] = "Keep",
+["Sisakan seed"] = "Seeds to keep",
+["Sistem"] = "System",
+["Smooth = background, particle, suara & animasi mati + FPS dibatasi. Blank = layar world disembunyikan (paling ringan, untuk AFK). Tampilan saja, farm tetap jalan"] = "Smooth = background, particles, sound & animation off + FPS capped. Blank = world screen hidden (lightest, for AFK). Display only, farming keeps running",
+["Speed Break (ms)"] = "Break speed (ms)",
+["Speed Harvest (ms)"] = "Harvest speed (ms)",
+["Speed Place (ms)"] = "Place speed (ms)",
+["Speed Plant (ms)"] = "Plant speed (ms)",
+["Splice di pindah world berikutnya"] = "Splice on the next world move",
+["Splice hanya di bawah level"] = "Splice only below level",
+["Splice seed"] = "Splice seeds",
+["Splice seed (di bawah level 10)"] = "Splice seeds (below level 10)",
+["Statistik"] = "Statistics",
+["Statistik & notifikasi"] = "Statistics & notifications",
+["Status Auto Join"] = "Auto Join Status",
+["Status Chat"] = "Chat Status",
+["Status Clear"] = "Clear Status",
+["Status Farmer"] = "Farmer Status",
+["Status Leveling"] = "Leveling Status",
+["Status Live"] = "Live Status",
+["Status Pabrik"] = "Factory Status",
+["Status Penjaga"] = "Guard Status",
+["Status Splice"] = "Splice Status",
+["Status Vending"] = "Vending Status",
+["Status keamanan"] = "Safety status",
+["Status visual"] = "Visual status",
+["Sudah terikat device atau belum, dan sesi aktifnya"] = "Bound to a device or not, and its active session",
+["Tag ID Discord"] = "Discord tag ID",
+["Tambah item yang dipegang"] = "Add held item",
+["Tanam Seed A lalu splice Seed B"] = "Plant Seed A then splice Seed B",
+["Tanam di atas block yang kosong"] = "Plant on top of empty blocks",
+["Tangan bergerak saat break / place / tanam / panen + efek place. Matikan untuk hemat FPS"] = "Hand moves when breaking / placing / planting / harvesting + place effect. Turn off to save FPS",
+["Taruh block kalau tidak ada jalan (block tetap tertinggal)"] = "Place blocks if there is no path (blocks stay behind)",
+["Taruh block untuk lewat jurang / naik ke block melayang"] = "Place blocks to cross gaps / climb to floating blocks",
+["Tas"] = "Bag",
+["Tas, bonus, chat"] = "Bag, bonus, chat",
+["Tekan 'Cek level'"] = "Tap 'Check level'",
+["Tekan 'Laporan XP'"] = "Tap 'XP Report'",
+["Tekan 2x. Script buyer berhenti paling lama 2 menit kemudian"] = "Tap 2x. The buyer's script stops within 2 minutes",
+["Tekan 2x. Script semua buyer berhenti paling lama 2 menit, dan tidak bisa dijalankan. Key admin tetap jalan"] = "Tap 2x. Every buyer's script stops within 2 minutes and can't be run. Admin keys keep working",
+["Tekan Scan sekarang"] = "Tap Scan now",
+["Tembus block, pakai tombol ▲/▼ (bisa kena rollback)"] = "Pass through blocks, use the ▲/▼ buttons (may rubber-band)",
+["Terlempar dari world"] = "Kicked from world",
+["Terlempar ke layar pilih world: masuk lagi ke world terakhir tiap beberapa detik sampai berhasil. Bisa dipakai tanpa Auto Rejoin"] = "Thrown to the world select screen: re-enter the last world every few seconds until it works. Can be used without Auto Rejoin",
+["Tes auto execute"] = "Test auto execute",
+["Tes kirim"] = "Test send",
+["Tes kirim pesan berikutnya"] = "Test sending the next message",
+["Tes webhook rejoin"] = "Test rejoin webhook",
+["Tiap jeda aksi (pukul, pasang, panen, tanam) ditambah sedikit secara acak. Hanya menambah, jadi sedikit lebih lambat"] = "Each action delay (punch, place, harvest, plant) gets a small random extra. It only adds, so slightly slower",
+["Tidak ada"] = "None",
+["Tidak rejoin kalau akun dibuka di perangkat lain, atau di-kick karena ban / cheat"] = "Don't rejoin if the account was opened on another device, or kicked for ban / cheating",
+["Tile per posisi"] = "Tiles per position",
+["Titik Drop"] = "Drop Point",
+["Titik break = posisi karakter"] = "Break point = character position",
+["Titik drop vending"] = "Vending drop point",
+["Title yang kamu punya"] = "Titles you own",
+["Tombol darurat, versi minimum, pengumuman"] = "Emergency switch, minimum version, announcement",
+["Tuju pohon yang hampir siap (detik)"] = "Go to trees that are almost ready (seconds)",
+["Tukar semua code aktif yang belum dipakai"] = "Redeem all active codes not used yet",
+["Tulis nama item, pilih hasilnya, tekan Pakai visual. Tidak perlu punya / memakai item aslinya. Hanya terlihat di layar kamu (pemain lain tetap melihat baju asli). 1 bagian tubuh = 1 item"] = "Type an item name, pick a result, tap Wear visual. You don't need to own / wear the real item. Only visible on your screen (other players still see your real clothes). 1 body part = 1 item",
+["Tunggu aman (detik)"] = "Wait until safe (seconds)",
+["Tunggu sebelum lanjut ke tile berikutnya"] = "Wait before moving to the next tile",
+["UI staff bawaan game (dikunci server)"] = "The game's built-in staff UI (locked by the server)",
+["URL Webhook"] = "Webhook URL",
+["URL Webhook Live (opsional)"] = "Live webhook URL (optional)",
+["URL script"] = "Script URL",
+["URL webhook rejoin"] = "Rejoin webhook URL",
+["Untuk 'Sekitar posisi'"] = "For 'Around position'",
+["Untuk 'Sekitar posisi'. Sekarang: "] = "For 'Around position'. Now: ",
+["Untuk ditanam lagi"] = "To plant again",
+["Untuk mode diam: jeda setelah mereka pergi"] = "For pause mode: delay after they leave",
+["Untuk mode keluar world"] = "For leave-world mode",
+["Untuk teman / akun sendiri (staff tetap dideteksi)"] = "For friends / your own accounts (staff are still detected)",
+["Untuk tes: kunjungan splice berikutnya tidak menunggu seed cukup (Auto Leveling harus jalan)"] = "For testing: the next splice visit doesn't wait for enough seeds (Auto Leveling must be running)",
+["Update otomatis"] = "Auto update",
+["Update otomatis tiap 2 detik"] = "Auto update every 2 seconds",
+["Update tiap (detik)"] = "Update every (seconds)",
+["Urutan rute"] = "Route order",
+["Utama"] = "Main",
+["Versi minimum"] = "Minimum version",
+["Versi script ini: "] = "This script's version: ",
+["WORLD atau WORLD:ID (kosong = world ini). Isi stock: ambil drop di sini. Kosongkan: drop di sini"] = "WORLD or WORLD:ID (empty = this world). Restock: pick up drops here. Empty out: drop here",
+["WORLD atau WORLD:ID (masuk lewat pintu ID)"] = "WORLD or WORLD:ID (enter through door ID)",
+["WORLD atau WORLD:ID (pintu). Item di-drop di tempat datang, atau di posisi drop kalau di-set"] = "WORLD or WORLD:ID (door). Items are dropped at the arrival spot, or at the drop position if set",
+["WORLD atau WORLD:ID (pintu). Kosong = titik drop bersama (tab Titik Drop)"] = "WORLD or WORLD:ID (door). Empty = shared drop point (Drop Point tab)",
+["WORLD atau WORLD:ID (pintu). Tidak dipakai untuk 'Isi tas saja'"] = "WORLD or WORLD:ID (door). Not used for 'Bag only'",
+["Waktu"] = "Time",
+["Webhook Live"] = "Live Webhook",
+["Webhook Rejoin"] = "Rejoin Webhook",
+["Webhook rejoin"] = "Rejoin webhook",
+["World acak & clear"] = "Random world & clear",
+["World asal"] = "Source world",
+["World cadangan"] = "Backup worlds",
+["World ditutup / di-kick dari world: masuk lagi ke world yang sama"] = "World closed / kicked from world: re-enter the same world",
+["World drop"] = "Drop world",
+["World splice"] = "Splice world",
+["World tujuan"] = "Target world",
+["World yang ada pemain lain dilewati. Ada pemain masuk saat clear = langsung pindah world (pemilik world bisa report)"] = "Worlds with other players are skipped. A player joins while clearing = move world right away (the world owner could report)",
+["XP = 1 per block pecah, jenis apa pun. Block keras (Rock 10 pukulan) rugi. 3 = Dirt & Cave Background saja. 0 = pecah semua"] = "XP = 1 per broken block, any type. Hard blocks (Rock, 10 hits) are a loss. 3 = Dirt & Cave Background only. 0 = break everything",
+["XP dari block pecah, bukan drop. Saat leveling hanya jalan memungut gem + Dirt / Cave Background Seed (selama masih dipakai splice). Drop lain diabaikan (yang tersentuh badan tetap terambil)"] = "XP comes from breaking blocks, not drops. While leveling, only walk to gems + Dirt / Cave Background Seed (while splice still uses them). Other drops are ignored (touched ones are still collected)",
+["Yang dideteksi"] = "Detect",
+["Yang dikirim"] = "What gets sent",
+["Zig-zag lebih cepat (tidak balik ke kiri)"] = "Zig-zag is faster (no going back to the left)",
+["contoh: 3"] = "example: 3",
+["contoh: seed"] = "example: seed",
+["nama item..."] = "item name...",
+["pesan 1|pesan 2|pesan 3"] = "message 1|message 2|message 3",
+}
 local State = {
 Running = false,
 Mode = "Place + Break",
@@ -1949,7 +2575,7 @@ local Connections = {}
 local HitCount = {}
 local PlacedAt = {}
 local I18N = { Lang = "id", Saved = "id", Ask = false }
-function I18N.T(s) return s end
+function I18N.T(s) return (WindUI.tr and WindUI.tr(s)) or s end
 function I18N.V(s) return s end
 function I18N.wrap(o) return o end
 local function notify(title, content, dur)
@@ -2082,6 +2708,11 @@ State.BreakMs = math.max(State.BreakMs, 200)
 Farmer.HarvestMs = math.max(Farmer.HarvestMs, 140)
 Farmer.PlantMs = math.max(Farmer.PlantMs, 140)
 Config.add("Misc", Misc, { "Speed" })
+Config.add("Bahasa", I18N, { "Lang" })
+if WindUI.setLang then
+WindUI.Lang = (I18N.Lang == "en") and "en" or "id"
+WindUI.onLang = function(l) I18N.Lang = l end
+end
 Config.add("Chat", Spam, { "Texts", "IntervalSec" })
 Config.add("Vending", Vend, { "Mode", "Point", "Items", "DropX", "DropY" })
 Config.add("Pabrik", Pabrik, {
@@ -9831,7 +10462,7 @@ for _, g in ipairs({
 { key = "farmer", title = "Farmer", icon = "🌱", color = Color3.fromRGB(70, 200, 120), desc = "Panen & tanam" },
 { key = "vending", title = "Vending", icon = "🏪", color = Color3.fromRGB(255, 110, 150), desc = "Isi & kosongkan stock" },
 { key = "world", title = "World", icon = "🌍", color = Color3.fromRGB(60, 200, 220), desc = "Clear & scan world" },
-{ key = "visual", title = "Visual", icon = "🎨", color = Color3.fromRGB(255, 120, 220), desc = "Tampilan & HP ringan" },
+{ key = "visual", title = "Visual", icon = "🎨", color = Color3.fromRGB(255, 120, 220), desc = "Item visual (hanya kamu yang lihat)" },
 { key = "ekstra", title = "Ekstra", icon = "🎒", color = Color3.fromRGB(170, 120, 255), desc = "Tas, bonus, chat" },
 { key = "aman", title = "Keamanan", icon = "🚨", color = Color3.fromRGB(240, 90, 100), desc = "Penjaga, staff & rejoin" },
 { key = "pantau", title = "Pantau", icon = "📊", color = Color3.fromRGB(250, 200, 70), desc = "Statistik & notifikasi" },
@@ -9849,7 +10480,7 @@ UI.TabInfo = {
 ["Vending"] = { "vending", 1 },
 ["Clear World"] = { "world", 1 }, ["Growscan"] = { "world", 2 },
 ["Leveling"] = { "farm", 3 }, ["Pindah Item"] = { "ekstra", 4 },
-["Tampilan"] = { "visual", 1 },
+["Item Visual"] = { "visual", 1 },
 ["Tas"] = { "ekstra", 1 }, ["Bonus"] = { "ekstra", 2 }, ["Auto Chat"] = { "ekstra", 3 },
 ["Penjaga"] = { "aman", 1 }, ["Staff"] = { "aman", 2 }, ["Auto Rejoin"] = { "aman", 3 },
 ["Statistik"] = { "pantau", 1 }, ["Discord"] = { "pantau", 2 }, ["Observasi"] = { "pantau", 3 },
@@ -9875,7 +10506,7 @@ set("farm", (State.Running and not State.Override) or Clear.Lv.On)
 set("farmer", Farmer.Running or Splice.Running)
 set("vending", Vend.Running)
 set("world", Clear.Running and not Clear.Lv.On)
-set("visual", State.PerfMode ~= "Mati" or State.LiteMode)
+set("visual", UI.Vis ~= nil and #UI.Vis.Wear > 0)
 set("ekstra", Spam.On or Auto.Xfer.On)
 set("aman", Guard.On)
 task.wait(1)
@@ -10641,9 +11272,9 @@ Min = 0, Max = 1500, Step = 50, Default = State.AfterBreakMs,
 Callback = function(v) State.AfterBreakMs = math.floor(v) end,
 })
 local SetTab = makeTab("Pengaturan", "sliders-horizontal", "setel")
-Box.VisTab = makeTab("Tampilan", "palette", "visual")
-Box.VisPerf = box(Box.VisTab, "HP ringan", true)
-Box.VisFx = box(Box.VisTab, "Animasi & suara", true)
+Box.VisTab = makeTab("Item Visual", "palette", "visual")
+Box.VisPerf = box(SetTab, "HP ringan", true)
+Box.VisFx = box(SetTab, "Animasi & suara", true)
 Box.VisItem = box(Box.VisTab, "Item visual (hanya kamu yang lihat)", true)
 function UI.visualReport()
 local L = {}
@@ -10783,6 +11414,54 @@ end
 end
 if found == 0 then add("-- Karakter: objek bernama pemain tidak ketemu") end
 end)
+local function struct(t, depth)
+local out, n = {}, 0
+pcall(function()
+for k, v in pairs(t) do
+n += 1
+if n > 12 then
+out[#out + 1] = "..."
+break
+end
+local d = typeof(k) .. ":" .. tostring(k) .. "=" .. short(v)
+if type(v) == "table" and depth > 0 then d = d .. " {" .. struct(v, depth - 1) .. "}" end
+out[#out + 1] = d
+end
+end)
+return table.concat(out, ", ")
+end
+if getloadedmodules then
+pcall(function()
+for _, m in ipairs(getloadedmodules()) do
+local ok, v = pcall(require, m)
+if ok and type(v) == "table" then
+if type(rawget(v, "wear")) == "table" then
+add(("-- Modul baju %s: %s"):format(m.Name, keys(v, 30)))
+add("   wear = " .. struct(v.wear, 2))
+if type(rawget(v, "look")) == "table" then add("   look = " .. struct(v.look, 2)) end
+end
+for _, nm in ipairs({ "SPRITE", "ICON" }) do
+local t = rawget(v, nm)
+if type(t) == "table" then add(("-- %s (%s): %s"):format(nm, m.Name, struct(t, 1))) end
+end
+end
+end
+end)
+end
+if type(Refs.Hud) == "table" and debug and debug.info then
+local parts = {}
+for _, nm in ipairs({ "onWear", "lookWorn", "wearsBot", "hatFrame" }) do
+local f = rawget(Refs.Hud, nm)
+if type(f) == "function" then
+local okI, np, va = pcall(debug.info, f, "a")
+parts[#parts + 1] = ("%s(%s%s)"):format(nm, okI and tostring(np) or "?", (okI and va) and ",..." or "")
+end
+end
+add("-- Hud fungsi baju (jumlah parameter): " .. table.concat(parts, ", "))
+end
+if UI.Vis then
+add("-- Visual: " .. tostring(UI.Vis.Status):gsub("\n", " | "))
+end
 local txt = table.concat(L, "\n")
 if #txt > 9000 then txt = string.sub(txt, 1, 9000) .. "\n...(dipotong)" end
 local clip = setclipboard or toclipboard
@@ -10843,43 +11522,111 @@ return false
 end)
 return ok and res
 end
-function V.find()
-local roots = {}
-if type(Refs.State) == "table" then roots[#roots + 1] = { Refs.State, "Refs.State" } end
-if type(Refs.Others) == "table" then
+local function slotSet()
+if V.Slots then return V.Slots end
+local t = {}
+for _, it in pairs(ItemDB) do
+local sl = rawget(it, "slot")
+if type(sl) == "string" then t[sl] = true end
+end
+V.Slots = t
+return t
+end
+local function itemSlot(id)
+local it = ItemDB[id]
+local sl = type(it) == "table" and rawget(it, "slot") or nil
+return type(sl) == "string" and sl or nil
+end
+local function hasSlotKeys(t)
+local S = slotSet()
+local ok, res = pcall(function()
+for k in pairs(t) do
+if S[k] then return true end
+end
+return false
+end)
+return ok and res
+end
+local function selfKey(t)
+local ok, res = pcall(function()
+for k, v in pairs(t) do
+if k == LocalPlayer or k == LocalPlayer.UserId or k == LocalPlayer.Name
+or tostring(k) == tostring(LocalPlayer.UserId) then return k end
+if type(v) == "table" and isSelf(v) then return k end
+end
+return nil
+end)
+return ok and res or nil
+end
+local function newSelfKey(t)
+local k = next(t)
+if typeof(k) == "Instance" then return LocalPlayer end
+if type(k) == "string" then
+return tonumber(k) and tostring(LocalPlayer.UserId) or LocalPlayer.Name
+end
+return LocalPlayer.UserId
+end
+local function findMod()
+if V.Mod then return V.Mod end
+if not getloadedmodules then return nil end
 pcall(function()
-for k, p in pairs(Refs.Others) do
-if type(p) == "table" and isSelf(p) then roots[#roots + 1] = { p, "Refs.Others." .. tostring(k) } end
+for _, m in ipairs(getloadedmodules()) do
+local ok, v = pcall(require, m)
+if ok and type(v) == "table" and type(rawget(v, "wear")) == "table" then
+V.Mod, V.ModName = v, m.Name
+break
+end
 end
 end)
+return V.Mod
 end
+function V.find()
+local mod = findMod()
+if mod then
+local wear = rawget(mod, "wear")
+if hasSlotKeys(wear) then
+V.Found = { t = wear, path = V.ModName .. ".wear" }
+return V.Found
+end
+local k = selfKey(wear)
+if k == nil and next(wear) == nil then
+V.Found = { t = wear, path = V.ModName .. ".wear (kosong)" }
+return V.Found
+end
+if k == nil then
+k = newSelfKey(wear)
+rawset(wear, k, {})
+V.Created = { t = wear, k = k }
+end
+local own = rawget(wear, k)
+if type(own) == "table" then
+V.Found = { t = own, path = ("%s.wear[%s]"):format(V.ModName, tostring(k)), key = k }
+return V.Found
+end
+end
+local roots = {}
+if type(Refs.State) == "table" then roots[#roots + 1] = { Refs.State, "Refs.State" } end
 if type(Refs.Hud) == "table" then roots[#roots + 1] = { Refs.Hud, "Refs.Hud" } end
-if type(Refs.World) == "table" then roots[#roots + 1] = { Refs.World, "Refs.World" } end
 local best, bestSc, bestPath = nil, 0, nil
 local seen, nodes = {}, 0
-local function walk(t, path, depth, self)
-if seen[t] or nodes > 4000 then return end
+local function walk(t, path, depth)
+if seen[t] or nodes > 3000 then return end
 seen[t] = true
 nodes += 1
 pcall(function()
 for k, v in pairs(t) do
 if type(v) == "table" and not seen[v] then
 local kp = path .. "." .. tostring(k)
-if wearName(k) then
-local sc = scoreWear(v)
-if sc > 0 then
-if self then sc += 10 end
+if wearName(k) and (hasSlotKeys(v) or scoreWear(v) > 0) then
+local sc = scoreWear(v) + (hasSlotKeys(v) and 5 or 0)
 if sc > bestSc then best, bestSc, bestPath = v, sc, kp end
 end
-end
-if depth < 3 then
-walk(v, kp, depth + 1, self or isSelf(v))
-end
+if depth < 3 then walk(v, kp, depth + 1) end
 end
 end
 end)
 end
-for _, r in ipairs(roots) do walk(r[1], r[2], 0, r[2] ~= "Refs.Hud" and r[2] ~= "Refs.World" or isSelf(r[1])) end
+for _, r in ipairs(roots) do walk(r[1], r[2], 0) end
 V.Found = best and { t = best, path = bestPath } or nil
 return V.Found
 end
@@ -10891,7 +11638,9 @@ for id, it in pairs(ItemDB) do
 local name = tostring(rawget(it, "name") or "")
 local ln = string.lower(name)
 if string.find(ln, q, 1, true) then
-out[#out + 1] = { id = id, cloth = isCloth(id), exact = ln == q, label = ("%s [%d]"):format(name, id) }
+local sl = itemSlot(id)
+out[#out + 1] = { id = id, cloth = sl ~= nil, exact = ln == q,
+label = ("%s%s [%d]"):format(name, sl and (" (" .. sl .. ")") or "", id) }
 end
 end
 table.sort(out, function(a, b)
@@ -10903,29 +11652,28 @@ while #out > 30 do table.remove(out) end
 return out
 end
 local function applyOne(id)
+local sl = itemSlot(id)
+if not sl then return false, "bukan item baju (tidak punya slot)" end
 local f = V.Found or V.find()
-if not f then return false, "data baju karakter tidak ketemu (pakai baju asli dulu, lalu coba lagi)" end
-local want = slotOf(id)
-local key
-for k, cur in pairs(f.t) do
-if cur == id then return true end
-local orig = V.Applied[k] and V.Applied[k].old or cur
-if isCloth(orig) and want and slotOf(orig) == want then
-key = k
-break
-end
-end
-if key == nil then
-return false, ("pakai dulu item asli di bagian yang sama (%s)"):format(want or "bagian tidak dikenal")
-end
-if not V.Applied[key] then V.Applied[key] = { old = f.t[key] } end
-V.Applied[key].id = id
-rawset(f.t, key, id)
+if not f then return false, "data baju game tidak ketemu (tekan Cek data visual & kirim hasilnya)" end
+if not V.Applied[sl] then V.Applied[sl] = { old = rawget(f.t, sl) } end
+V.Applied[sl].id = id
+rawset(f.t, sl, id)
 return true
 end
 function V.apply()
 V.Found = nil
 local okN, failN, why = 0, 0, nil
+local used = {}
+for i = #V.Wear, 1, -1 do
+local id = V.Wear[i]
+local sl = itemSlot(id)
+if sl and used[sl] then
+table.remove(V.Wear, i)
+elseif sl then
+used[sl] = true
+end
+end
 for _, id in ipairs(V.Wear) do
 local ok, e = applyOne(id)
 if ok then okN += 1 else
@@ -10935,16 +11683,32 @@ end
 end
 V.Status = (#V.Wear == 0) and "Mati"
 or (("%d terpasang%s%s"):format(okN, failN > 0 and (", " .. failN .. " gagal") or "", why and (" | " .. why) or ""))
-if V.Found then V.Status = V.Status .. " | data: " .. tostring(V.Found.path) end
+if V.Found then V.Status = V.Status .. "\nData: " .. tostring(V.Found.path) end
 return okN, failN, why
+end
+function V.remove(id)
+local idx = table.find(V.Wear, id)
+if idx then table.remove(V.Wear, idx) end
+local sl = itemSlot(id)
+local f = V.Found
+if sl and f and V.Applied[sl] then
+pcall(rawset, f.t, sl, V.Applied[sl].old)
+V.Applied[sl] = nil
+end
+V.apply()
 end
 function V.clear()
 local f = V.Found
 if f then
-for k, a in pairs(V.Applied) do pcall(rawset, f.t, k, a.old) end
+for sl, a in pairs(V.Applied) do pcall(rawset, f.t, sl, a.old) end
+end
+if V.Created then
+pcall(rawset, V.Created.t, V.Created.k, nil)
+V.Created = nil
 end
 table.clear(V.Applied)
 table.clear(V.Wear)
+V.Found = nil
 V.Status = "Mati"
 end
 task.spawn(function()
@@ -10961,13 +11725,11 @@ pcall(V.apply)
 else
 local f = V.Found
 if f then
-for k, a in pairs(V.Applied) do
-if rawget(f.t, k) ~= a.id then
-local cur = rawget(f.t, k)
+for sl, a in pairs(V.Applied) do
+local cur = rawget(f.t, sl)
 if cur ~= a.id then
 a.old = cur
-pcall(rawset, f.t, k, a.id)
-end
+pcall(rawset, f.t, sl, a.id)
 end
 end
 else
@@ -10981,8 +11743,8 @@ end)() end
 safe(function()
 Box.VisItem:Paragraph({
 Title = "Cara pakai",
-Desc = "1) Pakai item ASLI apa saja di bagian yang sama (mis. sayap apa saja untuk visual sayap). "
-.. "2) Tulis nama item, pilih hasilnya, tekan Pakai. Hanya terlihat di layar kamu, pemain lain tetap melihat baju asli",
+Desc = "Tulis nama item, pilih hasilnya, tekan Pakai visual. Tidak perlu punya / memakai item aslinya. "
+.. "Hanya terlihat di layar kamu (pemain lain tetap melihat baju asli). 1 bagian tubuh = 1 item",
 })
 end)
 safe(function()
@@ -11029,12 +11791,24 @@ local id = V.Pick
 if not id then return notify("Visual", "Cari & pilih item dulu", 4) end
 if not table.find(V.Wear, id) then V.Wear[#V.Wear + 1] = id end
 local okN, failN, why = V.apply()
-if table.find(V.Wear, id) and why and string.find(why, itemName(id), 1, true) then
-table.remove(V.Wear, table.find(V.Wear, id))
+if why and string.find(why, itemName(id), 1, true) then
+if table.find(V.Wear, id) then table.remove(V.Wear, table.find(V.Wear, id)) end
 notify("Visual", "Gagal: " .. tostring(why), 6)
 else
 notify("Visual", itemName(id) .. " terpasang (hanya di layar kamu)", 4)
 end
+end,
+})
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Lepas item yang dipilih",
+Desc = "Item di 'Hasil cari' yang sedang dipakai sebagai visual",
+Callback = function()
+local id = UI.Vis.Pick
+if not id or not table.find(UI.Vis.Wear, id) then return notify("Visual", "Item itu tidak sedang dipakai", 3) end
+UI.Vis.remove(id)
+notify("Visual", itemName(id) .. " dilepas", 3)
 end,
 })
 end)
