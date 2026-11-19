@@ -1,7 +1,7 @@
 local SKYP = ...
 if type(SKYP) ~= "table" then
 SKYP = {
-version = "v2.12.0",
+version = "v2.14.0",
 shared = {},
 onStop = {},
 isAlive = function() return true end,
@@ -50,7 +50,7 @@ return G.__Alfian == Session and SKYP.isAlive()
 end
 Session.Lic = { Api = "https://skyp-api.koplak132asu.workers.dev",
 Ver = (tostring(SKYP.version or ""):gsub("^[vV]", "")), Admin = false, Fails = 0, Off = true }
-if Session.Lic.Ver == "" then Session.Lic.Ver = "2.12.0" end
+if Session.Lic.Ver == "" then Session.Lic.Ver = "2.14.0" end
 do
 local Lic = Session.Lic
 local HS = game:GetService("HttpService")
@@ -2522,6 +2522,7 @@ Hud = nil,
 Trees = nil,
 Others = nil,
 }
+Session.Refs = Refs
 local Drops = { list = nil, update = nil, brokeAt = {} }
 local Anim = { fn = nil, idx = nil, set = nil }
 local DropFailUntil = {}
@@ -9465,7 +9466,205 @@ ColorSequenceKeypoint.new(1.00, Color3.fromRGB(170, 90, 255)),
 })
 local NAME_FONT = Enum.Font.FredokaOne
 NameFx.FLAG = "https://raw.githubusercontent.com/SkyP-Hub/UI/main/file_00000000746c82078e410708d42d8bd6.png"
-NameFx.HIDE_TITLE = true
+NameFx.RAINBOW = false
+NameFx.HIDE_TITLE = NameFx.RAINBOW
+NameFx.TITLE_FX = { legend = false, dr = false, title = "supersponsor", guild = nil, badge = true, noOwner = true, attr = true }
+NameFx.TitleOrig = {}
+do (function()
+local R, T = RolesModule, NameFx.TITLE_FX
+if type(R) ~= "table" or type(T) ~= "table" then return end
+local myId, myName = LocalPlayer.UserId, LocalPlayer.Name
+local function isMe(...)
+local n = select("#", ...)
+for i = 1, math.min(n, 4) do
+local a = select(i, ...)
+if a == myId or a == myName or a == LocalPlayer or (type(a) == "string" and a == tostring(myId)) then return true end
+if type(a) == "table" then
+local u = rawget(a, 1) or rawget(a, "userId") or rawget(a, "uid") or rawget(a, "id")
+if u == myId or tonumber(u) == myId then return true end
+end
+end
+return false
+end
+local function wrap(name, make)
+local orig = rawget(R, name)
+if type(orig) ~= "function" or NameFx.TitleOrig[name] then return end
+NameFx.TitleOrig[name] = orig
+rawset(R, name, make(orig))
+end
+if T.legend then
+wrap("legendOn", function(orig)
+return function(...)
+if alive() and isMe(...) then return true end
+return orig(...)
+end
+end)
+end
+if T.dr then
+for _, nm in ipairs({ "hasDr", "drOn" }) do
+wrap(nm, function(orig)
+return function(...)
+if alive() and isMe(...) then return true end
+return orig(...)
+end
+end)
+end
+wrap("drHidden", function(orig)
+return function(...)
+if alive() and isMe(...) then return false end
+return orig(...)
+end
+end)
+end
+local key = T.title
+if type(key) == "string" and key ~= "" then
+wrap("titleOf", function(orig)
+return function(...)
+if alive() and isMe(...) then return key end
+return orig(...)
+end
+end)
+wrap("titlesOf", function(orig)
+return function(...)
+local r = orig(...)
+if alive() and isMe(...) and type(r) == "table" and not table.find(r, key) then
+local c = table.clone(r)
+c[#c + 1] = key
+return c
+end
+return r
+end
+end)
+wrap("badgeOf", function(orig)
+return function(...)
+if alive() and isMe(...) then
+local b = rawget(R, "TITLE_BADGES")
+local e = type(b) == "table" and b[key] or nil
+if type(e) == "table" then e = rawget(e, "image") end
+if type(e) == "string" then return e end
+end
+return orig(...)
+end
+end)
+wrap("tagSize", function(orig)
+return function(...)
+if alive() and isMe(...) then
+local sz = rawget(R, "TITLE_SIZES")
+if type(sz) == "table" and type(sz[key]) == "number" then return sz[key] end
+end
+return orig(...)
+end
+end)
+end
+NameFx.TitleCalls = { nameOf = 0, lineName = 0 }
+if not NameFx.RAINBOW then
+wrap("nameOf", function(orig)
+return function(...)
+NameFx.TitleCalls.nameOf += 1
+if alive() and Misc.CustomName and isMe(...) then return Misc.NameText end
+return orig(...)
+end
+end)
+wrap("lineName", function(orig)
+return function(...)
+NameFx.TitleCalls.lineName += 1
+return orig(...)
+end
+end)
+end
+if T.noOwner then
+wrap("nameCode", function(orig)
+return function(...)
+local r = orig(...)
+if r == "2" and alive() and isMe(...) then
+local ok, c = pcall(orig, (...))
+return (ok and type(c) == "string" and c ~= "2") and c or "w"
+end
+return r
+end
+end)
+end
+local rank = tonumber(T.guild)
+if rank then
+for _, nm in ipairs({ "guildTag", "guildRankTag" }) do
+wrap(nm, function(orig)
+return function(...)
+local r = orig(...)
+if alive() and isMe(...) then
+if type(r) == "number" then return rank end
+local tags = rawget(R, "GUILD_TAGS")
+return type(tags) == "table" and tags[rank] or r
+end
+return r
+end
+end)
+end
+end
+end)() end
+NameFx.ATTRS = { "WornTitle", "HasLegend", "HideLegendUntil", "DrTitle", "WearDr", "HideDrUntil", "GuildRank" }
+NameFx.AttrOrig = nil
+function NameFx.attrRestore()
+local o = NameFx.AttrOrig
+if not o then return end
+NameFx.AttrOrig = nil
+for _, k in ipairs(NameFx.ATTRS) do pcall(function() LocalPlayer:SetAttribute(k, o[k]) end) end
+end
+function NameFx.attrTick()
+local T = NameFx.TITLE_FX
+if type(T) ~= "table" or not T.attr then return end
+if not NameFx.AttrOrig then
+local o = {}
+for _, k in ipairs(NameFx.ATTRS) do o[k] = LocalPlayer:GetAttribute(k) end
+NameFx.AttrOrig = o
+end
+local o = NameFx.AttrOrig
+local want = {
+WornTitle = (type(T.title) == "string" and T.title) or (T.dr and "dr") or o.WornTitle,
+HasLegend = T.legend and true or o.HasLegend,
+HideLegendUntil = T.legend and 0 or o.HideLegendUntil,
+DrTitle = T.dr and true or o.DrTitle,
+WearDr = T.dr and true or o.WearDr,
+HideDrUntil = T.dr and 0 or o.HideDrUntil,
+GuildRank = tonumber(T.guild) or o.GuildRank,
+}
+for _, k in ipairs(NameFx.ATTRS) do
+local v = want[k]
+if LocalPlayer:GetAttribute(k) ~= v then pcall(function() LocalPlayer:SetAttribute(k, v) end) end
+end
+end
+task.spawn(function()
+while alive() do
+pcall(NameFx.attrTick)
+task.wait(0.5)
+end
+pcall(NameFx.attrRestore)
+end)
+function NameFx.restoreTitle()
+pcall(NameFx.attrRestore)
+local e = NameFx.ownEntry
+if e then pcall(function() e.t[e.k] = e.old end) end
+NameFx.ownEntry = nil
+if type(RolesModule) ~= "table" then return end
+for name, orig in pairs(NameFx.TitleOrig) do pcall(rawset, RolesModule, name, orig) end
+table.clear(NameFx.TitleOrig)
+end
+function NameFx.ownEntryTick()
+if NameFx.RAINBOW or not Misc.CustomName then return end
+local o = Refs.Others
+if type(o) ~= "table" or type(rawget(o, "list")) ~= "function" then return end
+local ok, list = pcall(o.list)
+if not ok or type(list) ~= "table" then return end
+for _, e in ipairs(list) do
+if type(e) == "table" and tonumber(e[1] or e.userId) == LocalPlayer.UserId then
+local k = (e[2] ~= nil) and 2 or "name"
+if e[k] ~= Misc.NameText then
+if not NameFx.ownEntry or NameFx.ownEntry.t ~= e then NameFx.ownEntry = { t = e, k = k, old = e[k] } end
+e[k] = Misc.NameText
+end
+return
+end
+end
+end
 NameFx.titles = {}
 NameFx.flag = nil
 function NameFx.findBitmap(holder)
@@ -9820,6 +10019,12 @@ end
 local cx, cy = NameFx.center()
 local cam = workspace.CurrentCamera
 add("Nametag v7 | nama: " .. tostring(LocalPlayer.DisplayName) .. " / " .. tostring(LocalPlayer.Name))
+do
+local tc = NameFx.TitleCalls or {}
+add(("Mode: %s | nameOf dipanggil %d | lineName %d | entri world diganti: %s"):format(
+NameFx.RAINBOW and "rainbow" or "nama game + title", tc.nameOf or 0, tc.lineName or 0,
+tostring(NameFx.ownEntry ~= nil)))
+end
 add(("Karakter di layar: %d,%d | layar %s"):format(cx, cy, tostring(cam and cam.ViewportSize)))
 local okL, list = pcall(NameFx.scanTexts)
 if not okL then
@@ -9923,7 +10128,66 @@ if clip then clip(txt) end
 end)
 return #out
 end
+function NameFx.titleArt(tblName)
+local T, R = NameFx.TITLE_FX, RolesModule
+if type(T) ~= "table" or T.badge == false or type(T.title) ~= "string" or type(R) ~= "table" then return nil end
+local t = rawget(R, tblName)
+local e = type(t) == "table" and t[T.title] or nil
+local img = type(e) == "table" and rawget(e, "image") or e
+if type(img) ~= "string" then return nil end
+return img, type(e) == "table" and tonumber(rawget(e, "cell")) or nil
+end
+function NameFx.titleKeep(holder)
+local img, cell = NameFx.titleArt("TITLE_BADGES")
+local found = false
+if img then
+local want = cell and Vector2.new(cell, cell) or Vector2.zero
+for _, o in ipairs(holder:GetChildren()) do
+if (o:IsA("ImageLabel") or o:IsA("ImageButton")) and o.Image == img then
+found = true
+if o.ImageRectOffset ~= Vector2.zero then o.ImageRectOffset = Vector2.zero end
+if o.ImageRectSize ~= want then o.ImageRectSize = want end
+if o.ScaleType ~= Enum.ScaleType.Fit then o.ScaleType = Enum.ScaleType.Fit end
+end
+end
+end
+local wimg = NameFx.titleArt("TITLE_WRENCHES")
+if wimg then
+for _, fr in ipairs(holder:GetChildren()) do
+local base = fr:IsA("Frame") and fr:FindFirstChild("Base")
+if base and base:IsA("ImageLabel") and base.Image == wimg and not fr.Visible then fr.Visible = true end
+end
+end
+return found
+end
 function NameFx.step()
+if not NameFx.RAINBOW then
+if NameFx.tag or NameFx.panel then
+dropEntry(NameFx.tag)
+dropEntry(NameFx.panel)
+NameFx.tag, NameFx.panel = nil, nil
+end
+local now = os.clock()
+if now - (NameFx.entryAt or 0) > 1 then
+NameFx.entryAt = now
+pcall(NameFx.ownEntryTick)
+end
+local cand = NameFx.findOwnTag()
+if cand then
+if not cand.bm.Visible then cand.bm.Visible = true end
+if NameFx.titleKeep(cand.o) then
+if NameFx.flag then NameFx.flagRestore() end
+else
+NameFx.extrasScan({ label = cand.bm, holder = cand.o, bitmap = cand.bm })
+NameFx.extrasKeep()
+end
+NameFx.hadTag = true
+elseif NameFx.hadTag then
+NameFx.hadTag = false
+NameFx.flagRestore()
+end
+return
+end
 local chat = PlayerGui:FindFirstChild("ChatGui")
 local hud = chat and chat:FindFirstChild("HUD")
 local panel = hud and hud:FindFirstChild("PlayerPanel")
@@ -10464,6 +10728,7 @@ for _, g in ipairs({
 { key = "world", title = "World", icon = "🌍", color = Color3.fromRGB(60, 200, 220), desc = "Clear & scan world" },
 { key = "visual", title = "Visual", icon = "🎨", color = Color3.fromRGB(255, 120, 220), desc = "Item visual (hanya kamu yang lihat)" },
 { key = "ekstra", title = "Ekstra", icon = "🎒", color = Color3.fromRGB(170, 120, 255), desc = "Tas, bonus, chat" },
+{ key = "proxy", title = "Proxy", icon = "💬", color = Color3.fromRGB(90, 220, 170), desc = "Perintah chat ala proxy GT" },
 { key = "aman", title = "Keamanan", icon = "🚨", color = Color3.fromRGB(240, 90, 100), desc = "Penjaga, staff & rejoin" },
 { key = "pantau", title = "Pantau", icon = "📊", color = Color3.fromRGB(250, 200, 70), desc = "Statistik & notifikasi" },
 { key = "setel", title = "Setelan", icon = "🔧", color = Color3.fromRGB(150, 160, 180), desc = "Pengaturan & koneksi" },
@@ -10485,6 +10750,7 @@ UI.TabInfo = {
 ["Penjaga"] = { "aman", 1 }, ["Staff"] = { "aman", 2 }, ["Auto Rejoin"] = { "aman", 3 },
 ["Statistik"] = { "pantau", 1 }, ["Discord"] = { "pantau", 2 }, ["Observasi"] = { "pantau", 3 },
 ["Pengaturan"] = { "setel", 1 }, ["Koneksi"] = { "setel", 2 }, ["Admin"] = { "setel", 3 },
+["Proxy"] = { "proxy", 1 }, ["Perintah"] = { "proxy", 2 },
 }
 UI.OldGroup = { farm = "farm", fitur = "ekstra", aman = "aman", setel = "setel" }
 local function makeTab(title, icon, group)
@@ -11461,6 +11727,8 @@ add("-- Hud fungsi baju (jumlah parameter): " .. table.concat(parts, ", "))
 end
 if UI.Vis then
 add("-- Visual: " .. tostring(UI.Vis.Status):gsub("\n", " | "))
+add("-- Contoh paket: " .. (UI.Vis.Tpl and "ada" or "belum"))
+for _, l in ipairs(UI.Vis.Log or {}) do add("   " .. l) end
 end
 local txt = table.concat(L, "\n")
 if #txt > 9000 then txt = string.sub(txt, 1, 9000) .. "\n...(dipotong)" end
@@ -11469,166 +11737,207 @@ local copied = type(clip) == "function" and pcall(clip, txt)
 warn("[SkyP] " .. txt)
 return txt, copied
 end
-UI.Vis = { Wear = {}, Status = "Mati", Applied = {}, Pick = nil, Found = nil }
-Config.add("Visual", UI.Vis, { "Wear" })
+UI.Vis = { Wear = {}, Status = "Mati", Pick = nil, Tpl = nil, TplS = "", Bag = {}, Log = {}, Count = 1 }
+Config.add("Visual", UI.Vis, { "Wear", "TplS", "Count" })
 do (function()
 local V = UI.Vis
-local SLOTKEYS = { "slot", "part", "bodyPart", "bodypart", "clothType", "clothSlot", "wearSlot", "layer", "category", "sub", "subtype", "type" }
-local WEARPAT = { "cloth", "wear", "equip", "outfit", "look", "avatar", "skin" }
-local function isCloth(id)
-local it = type(id) == "number" and ItemDB[id] or nil
-if type(it) ~= "table" then return false end
-local k = string.lower(tostring(rawget(it, "kind") or ""))
-return string.find(k, "cloth", 1, true) ~= nil or string.find(k, "wear", 1, true) ~= nil
-end
-local function slotOf(id)
-local it = ItemDB[id]
-if type(it) ~= "table" then return nil end
-for _, k in ipairs(SLOTKEYS) do
-local v = rawget(it, k)
-if (type(v) == "number" or type(v) == "string") and tostring(v) ~= "" then return k .. "=" .. tostring(v) end
-end
-return nil
-end
-local function wearName(k)
-k = string.lower(tostring(k))
-for _, p in ipairs(WEARPAT) do
-if string.find(k, p, 1, true) then return true end
-end
-return false
-end
-local function scoreWear(t)
-local n = 0
-local ok = pcall(function()
-local c = 0
-for _, v in pairs(t) do
-c += 1
-if c > 40 then break end
-if isCloth(v) then n += 1 end
-end
-end)
-return ok and n or 0
-end
-local function isSelf(t)
-local ok, res = pcall(function()
-for _, k in ipairs({ "name", "Name", "user", "username", "displayName" }) do
-local v = rawget(t, k)
-if v == LocalPlayer.Name or v == LocalPlayer.DisplayName then return true end
-end
-for _, k in ipairs({ "uid", "userId", "UserId", "id" }) do
-if tonumber(rawget(t, k)) == LocalPlayer.UserId then return true end
-end
-return false
-end)
-return ok and res
-end
-local function slotSet()
-if V.Slots then return V.Slots end
-local t = {}
-for _, it in pairs(ItemDB) do
-local sl = rawget(it, "slot")
-if type(sl) == "string" then t[sl] = true end
-end
-V.Slots = t
-return t
-end
+V.Bag = {}
 local function itemSlot(id)
 local it = ItemDB[id]
 local sl = type(it) == "table" and rawget(it, "slot") or nil
 return type(sl) == "string" and sl or nil
 end
-local function hasSlotKeys(t)
-local S = slotSet()
-local ok, res = pcall(function()
-for k in pairs(t) do
-if S[k] then return true end
+local function isClothId(v) return type(v) == "number" and itemSlot(v) ~= nil end
+local function clean(v, depth)
+local tv = type(v)
+if tv == "number" or tv == "string" or tv == "boolean" then return v end
+if tv ~= "table" or depth > 4 then return nil end
+local o = {}
+for k, x in pairs(v) do
+if type(k) == "number" or type(k) == "string" then
+local c = clean(x, depth + 1)
+if c ~= nil then o[k] = c end
 end
-return false
-end)
-return ok and res
 end
-local function selfKey(t)
-local ok, res = pcall(function()
-for k, v in pairs(t) do
-if k == LocalPlayer or k == LocalPlayer.UserId or k == LocalPlayer.Name
-or tostring(k) == tostring(LocalPlayer.UserId) then return k end
-if type(v) == "table" and isSelf(v) then return k end
+return o
 end
-return nil
-end)
-return ok and res or nil
+local HS = game:GetService("HttpService")
+local function ser(v)
+if type(v) ~= "table" then return v end
+local e = {}
+for k, x in pairs(v) do e[#e + 1] = { type(k) == "number" and "n" or "s", tostring(k), ser(x) } end
+return { T = e }
 end
-local function newSelfKey(t)
-local k = next(t)
-if typeof(k) == "Instance" then return LocalPlayer end
-if type(k) == "string" then
-return tonumber(k) and tostring(LocalPlayer.UserId) or LocalPlayer.Name
+local function deser(v)
+if type(v) ~= "table" or type(v.T) ~= "table" then return v end
+local o = {}
+for _, e in ipairs(v.T) do
+local k = (e[1] == "n") and tonumber(e[2]) or e[2]
+if k ~= nil then o[k] = deser(e[3]) end
 end
-return LocalPlayer.UserId
+return o
 end
-local function findMod()
-if V.Mod then return V.Mod end
-if not getloadedmodules then return nil end
-pcall(function()
-for _, m in ipairs(getloadedmodules()) do
-local ok, v = pcall(require, m)
-if ok and type(v) == "table" and type(rawget(v, "wear")) == "table" then
-V.Mod, V.ModName = v, m.Name
+function V.saveTpl()
+local ok, js = pcall(function() return HS:JSONEncode(ser(V.Tpl)) end)
+V.TplS = ok and js or ""
+end
+if type(V.TplS) == "string" and V.TplS ~= "" then
+local ok, d = pcall(function() return HS:JSONDecode(V.TplS) end)
+if ok then V.Tpl = deser(d) end
+end
+local function describe(v, depth)
+depth = depth or 0
+if type(v) ~= "table" then return tostring(v) end
+if depth > 3 then return "{...}" end
+local out, n = {}, 0
+for k, x in pairs(v) do
+n += 1
+if n > 12 then
+out[#out + 1] = "..."
 break
 end
+out[#out + 1] = tostring(k) .. "=" .. describe(x, depth + 1)
 end
-end)
-return V.Mod
+return "{" .. table.concat(out, ", ") .. "}"
 end
-function V.find()
-local mod = findMod()
-if mod then
-local wear = rawget(mod, "wear")
-if hasSlotKeys(wear) then
-V.Found = { t = wear, path = V.ModName .. ".wear" }
-return V.Found
+local function log(kind, args)
+local parts = {}
+for i = 1, args.n do parts[i] = describe(args[i]) end
+table.insert(V.Log, os.date("%H:%M:%S") .. " " .. kind .. "(" .. table.concat(parts, ", ") .. ")")
+while #V.Log > 8 do table.remove(V.Log, 1) end
 end
-local k = selfKey(wear)
-if k == nil and next(wear) == nil then
-V.Found = { t = wear, path = V.ModName .. ".wear (kosong)" }
-return V.Found
+local function findCloth(v, depth, out)
+out = out or {}
+depth = depth or 0
+if isClothId(v) then
+out[#out + 1] = v
+elseif type(v) == "table" and depth < 4 then
+for _, x in pairs(v) do findCloth(x, depth + 1, out) end
 end
-if k == nil then
-k = newSelfKey(wear)
-rawset(wear, k, {})
-V.Created = { t = wear, k = k }
+return out
 end
-local own = rawget(wear, k)
-if type(own) == "table" then
-V.Found = { t = own, path = ("%s.wear[%s]"):format(V.ModName, tostring(k)), key = k }
-return V.Found
+local function wearPacket()
+local net = Session.Found and Session.Found.Net
+local p = type(net) == "table" and rawget(net, "wear") or nil
+if type(p) == "table" and type(rawget(p, "send")) == "function" and type(rawget(p, "listen")) == "function" then
+return p
 end
+return nil
 end
-local roots = {}
-if type(Refs.State) == "table" then roots[#roots + 1] = { Refs.State, "Refs.State" } end
-if type(Refs.Hud) == "table" then roots[#roots + 1] = { Refs.Hud, "Refs.Hud" } end
-local best, bestSc, bestPath = nil, 0, nil
-local seen, nodes = {}, 0
-local function walk(t, path, depth)
-if seen[t] or nodes > 3000 then return end
-seen[t] = true
-nodes += 1
+local lastSendAt = 0
+function V.hook()
+local p = wearPacket()
+if not p or V.Hooked == p then return p ~= nil end
+V.Hooked = p
 pcall(function()
-for k, v in pairs(t) do
-if type(v) == "table" and not seen[v] then
-local kp = path .. "." .. tostring(k)
-if wearName(k) and (hasSlotKeys(v) or scoreWear(v) > 0) then
-local sc = scoreWear(v) + (hasSlotKeys(v) and 5 or 0)
-if sc > bestSc then best, bestSc, bestPath = v, sc, kp end
+for k, v in pairs(p) do
+if type(v) == "table" and (k == LocalPlayer.Name or k == tostring(LocalPlayer.UserId)) then rawset(p, k, nil) end
 end
-if depth < 3 then walk(v, kp, depth + 1) end
+end)
+local orig = rawget(p, "send")
+V.OrigSend = orig
+rawset(p, "send", function(...)
+local args = table.pack(...)
+pcall(log, "kirim", args)
+local ids = findCloth(clean(args, 0))
+for _, id in ipairs(ids) do
+if V.Bag[id] then
+task.spawn(function() pcall(V.wearLocal, id, true) end)
+return nil
+end
+end
+lastSendAt = os.clock()
+return orig(...)
+end)
+pcall(p.listen, function(...)
+local args = table.pack(...)
+pcall(log, "terima", args)
+if V.Faking then return end
+if os.clock() - lastSendAt < 3 then
+local c = clean(args, 0)
+if c and #findCloth(c) > 0 then
+V.Tpl = c
+V.TplAt = os.clock()
+V.saveTpl()
 end
 end
 end)
+return true
 end
-for _, r in ipairs(roots) do walk(r[1], r[2], 0) end
-V.Found = best and { t = best, path = bestPath } or nil
-return V.Found
+local function build(id, remove)
+local tpl = V.Tpl
+if type(tpl) ~= "table" then
+return nil, "format paket belum dipelajari: pakai / lepas 1 baju ASLI sekali (dari tas game), lalu coba lagi"
+end
+local sl = itemSlot(id)
+local copy = clean(tpl, 0)
+local done = false
+local function bySlot(t, depth)
+if done or type(t) ~= "table" or depth > 4 then return end
+local slotKeys = 0
+for k in pairs(t) do
+if type(k) == "string" and V.SlotSet[k] then slotKeys += 1 end
+end
+if slotKeys > 0 then
+t[sl] = remove and 0 or id
+done = true
+return
+end
+for _, x in pairs(t) do bySlot(x, depth + 1) end
+end
+local function single(t, depth)
+if done or type(t) ~= "table" or depth > 4 then return end
+for k, x in pairs(t) do
+if isClothId(x) then
+t[k] = remove and 0 or id
+done = true
+elseif type(x) == "string" and V.SlotSet[x] then
+t[k] = sl
+end
+end
+if not done then
+for _, x in pairs(t) do single(x, depth + 1) end
+end
+end
+bySlot(copy, 0)
+if not done then single(copy, 0) end
+if not done then return nil, "format paket contoh tidak dikenali (kirim Cek data visual)" end
+return copy
+end
+function V.wearLocal(id, fromBag, remove)
+if not V.hook() then return false, "paket wear game tidak ketemu" end
+V.slots()
+local sl = itemSlot(id)
+if not sl then return false, "bukan item baju" end
+if fromBag and V.Worn and V.Worn[sl] == id then remove = true end
+local args, why = build(id, remove)
+if not args then return false, why end
+local p = V.Hooked
+local okL, list = pcall(p.getListeners)
+if not okL or type(list) ~= "table" then return false, "daftar pendengar paket tidak terbaca" end
+V.Faking = true
+local n = 0
+for _, fn in pairs(list) do
+if type(fn) == "function" then
+local ok = pcall(fn, table.unpack(args, 1, args.n or #args))
+if ok then n += 1 end
+end
+end
+V.Faking = false
+V.Worn = V.Worn or {}
+V.Worn[sl] = (not remove) and id or nil
+if n == 0 then return false, "pendengar paket menolak data buatan" end
+return true
+end
+function V.slots()
+if V.SlotSet then return V.SlotSet end
+local t = {}
+for _, it in pairs(ItemDB) do
+local sl = rawget(it, "slot")
+if type(sl) == "string" then t[sl] = true end
+end
+V.SlotSet = t
+return t
 end
 function V.search(q)
 q = string.lower((tostring(q or ""):gsub("^%s+", ""):gsub("%s+$", "")))
@@ -11651,90 +11960,63 @@ end)
 while #out > 30 do table.remove(out) end
 return out
 end
-local function applyOne(id)
-local sl = itemSlot(id)
-if not sl then return false, "bukan item baju (tidak punya slot)" end
-local f = V.Found or V.find()
-if not f then return false, "data baju game tidak ketemu (tekan Cek data visual & kirim hasilnya)" end
-if not V.Applied[sl] then V.Applied[sl] = { old = rawget(f.t, sl) } end
-V.Applied[sl].id = id
-rawset(f.t, sl, id)
-return true
-end
 function V.apply()
-V.Found = nil
-local okN, failN, why = 0, 0, nil
-local used = {}
+V.slots()
+local used, okN, why = {}, 0, nil
 for i = #V.Wear, 1, -1 do
-local id = V.Wear[i]
-local sl = itemSlot(id)
-if sl and used[sl] then
-table.remove(V.Wear, i)
-elseif sl then
-used[sl] = true
-end
+local sl = itemSlot(V.Wear[i])
+if not sl or used[sl] then table.remove(V.Wear, i) else used[sl] = true end
 end
 for _, id in ipairs(V.Wear) do
-local ok, e = applyOne(id)
-if ok then okN += 1 else
-failN += 1
-why = ("%s: %s"):format(itemName(id), tostring(e))
-end
+local ok, e = V.wearLocal(id)
+if ok then okN += 1 else why = ("%s: %s"):format(itemName(id), tostring(e)) end
 end
 V.Status = (#V.Wear == 0) and "Mati"
-or (("%d terpasang%s%s"):format(okN, failN > 0 and (", " .. failN .. " gagal") or "", why and (" | " .. why) or ""))
-if V.Found then V.Status = V.Status .. "\nData: " .. tostring(V.Found.path) end
-return okN, failN, why
+or (("%d dipakai%s"):format(okN, why and (" | gagal " .. why) or ""))
+return okN, why
 end
 function V.remove(id)
 local idx = table.find(V.Wear, id)
 if idx then table.remove(V.Wear, idx) end
-local sl = itemSlot(id)
-local f = V.Found
-if sl and f and V.Applied[sl] then
-pcall(rawset, f.t, sl, V.Applied[sl].old)
-V.Applied[sl] = nil
-end
+pcall(V.wearLocal, id, false, true)
 V.apply()
 end
 function V.clear()
-local f = V.Found
-if f then
-for sl, a in pairs(V.Applied) do pcall(rawset, f.t, sl, a.old) end
-end
-if V.Created then
-pcall(rawset, V.Created.t, V.Created.k, nil)
-V.Created = nil
-end
-table.clear(V.Applied)
+for _, id in ipairs(V.Wear) do pcall(V.wearLocal, id, false, true) end
 table.clear(V.Wear)
-V.Found = nil
-V.Status = "Mati"
+V.Status = "Mati (baju asli kembali setelah ganti baju / pindah world)"
+end
+function V.toBag(id, n)
+if not Refs.Inv then return false, "tas game belum terbaca (Hubungkan ke game)" end
+n = math.clamp(math.floor(tonumber(n) or 1), 1, 200)
+local before = invCount(id)
+local ok, e = pcall(function() Refs.Inv:add(id, n) end)
+if not ok then return false, tostring(e) end
+V.Bag[id] = (V.Bag[id] or 0) + n
+V.hook()
+return true, invCount(id) - before
+end
+function V.clearBag()
+local n = 0
+for id, cnt in pairs(V.Bag) do
+pcall(function() Refs.Inv:remove(id, math.min(cnt, invCount(id))) end)
+n += 1
+end
+table.clear(V.Bag)
+return n
 end
 task.spawn(function()
-local lastWorld = nil
+local lastWorld
 while alive() do
-task.wait(0.5)
-if #V.Wear > 0 and Refs.World then
-local w = Refs.World
-if w ~= lastWorld then
-lastWorld = w
-table.clear(V.Applied)
 task.wait(1)
+pcall(V.hook)
+local w = Refs.World
+if w and w ~= lastWorld and Guard.inWorld() then
+lastWorld = w
+V.Worn = {}
+if #V.Wear > 0 then
+task.wait(2)
 pcall(V.apply)
-else
-local f = V.Found
-if f then
-for sl, a in pairs(V.Applied) do
-local cur = rawget(f.t, sl)
-if cur ~= a.id then
-a.old = cur
-pcall(rawset, f.t, sl, a.id)
-end
-end
-else
-pcall(V.apply)
-end
 end
 end
 end
@@ -11743,8 +12025,9 @@ end)() end
 safe(function()
 Box.VisItem:Paragraph({
 Title = "Cara pakai",
-Desc = "Tulis nama item, pilih hasilnya, tekan Pakai visual. Tidak perlu punya / memakai item aslinya. "
-.. "Hanya terlihat di layar kamu (pemain lain tetap melihat baju asli). 1 bagian tubuh = 1 item",
+Desc = "Sekali saja: pakai / lepas 1 baju ASLI dari tas game (supaya SkyP belajar format game). "
+.. "Lalu tulis nama item, pilih hasilnya, tekan Pakai visual, atau masukkan ke tas lalu pakai dari tas game. "
+.. "Hanya terlihat di layar kamu, pemain lain tetap melihat baju asli",
 })
 end)
 safe(function()
@@ -11781,22 +12064,46 @@ UI.Vis.Pick = tonumber(string.match(tostring(v), "%[(%d+)%]$"))
 end,
 })
 end)
+addNumber(Box.VisItem, {
+Title = "Jumlah ke tas",
+Desc = "Untuk 'Masukkan ke tas' (1-200)",
+Min = 1, Max = 200, Step = 1, Default = UI.Vis.Count,
+Callback = function(v) UI.Vis.Count = math.floor(v) end,
+})
 safe(function()
 Box.VisItem:Button({
-Title = "Pakai visual",
-Desc = "Item yang dipilih di 'Hasil cari'",
+Title = "Masukkan ke tas",
+Desc = "Item di 'Hasil cari' masuk ke tas (hanya di HP ini, tidak langsung dipakai). Pakai dari tas game seperti biasa",
 Callback = function()
 local V = UI.Vis
 local id = V.Pick
 if not id then return notify("Visual", "Cari & pilih item dulu", 4) end
-if not table.find(V.Wear, id) then V.Wear[#V.Wear + 1] = id end
-local okN, failN, why = V.apply()
-if why and string.find(why, itemName(id), 1, true) then
-if table.find(V.Wear, id) then table.remove(V.Wear, table.find(V.Wear, id)) end
-notify("Visual", "Gagal: " .. tostring(why), 6)
+local ok, r = V.toBag(id, V.Count)
+if ok then
+notify("Visual", ("%s x%d masuk tas (visual)"):format(itemName(id), V.Count), 4)
 else
-notify("Visual", itemName(id) .. " terpasang (hanya di layar kamu)", 4)
+notify("Visual", "Gagal: " .. tostring(r), 5)
 end
+end,
+})
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Pakai visual",
+Desc = "Langsung pakai item di 'Hasil cari' (tersimpan, dipakai lagi tiap masuk world)",
+Callback = function()
+local V = UI.Vis
+local id = V.Pick
+if not id then return notify("Visual", "Cari & pilih item dulu", 4) end
+local ok, why = V.wearLocal(id)
+if not ok then return notify("Visual", "Gagal: " .. tostring(why), 6) end
+for i = #V.Wear, 1, -1 do
+local it = ItemDB[V.Wear[i]]
+if it and ItemDB[id] and rawget(it, "slot") == rawget(ItemDB[id], "slot") then table.remove(V.Wear, i) end
+end
+V.Wear[#V.Wear + 1] = id
+V.Status = #V.Wear .. " dipakai"
+notify("Visual", itemName(id) .. " dipakai (hanya di layar kamu)", 4)
 end,
 })
 end)
@@ -11815,10 +12122,20 @@ end)
 safe(function()
 Box.VisItem:Button({
 Title = "Lepas semua visual",
-Desc = "Kembali ke baju asli",
+Desc = "Berhenti memakai visual tersimpan",
 Callback = function()
 UI.Vis.clear()
 notify("Visual", "Visual dilepas", 3)
+end,
+})
+end)
+safe(function()
+Box.VisItem:Button({
+Title = "Hapus item visual dari tas",
+Desc = "Item buatan yang dimasukkan lewat 'Masukkan ke tas'",
+Callback = function()
+local n = UI.Vis.clearBag()
+notify("Visual", n .. " jenis item visual dihapus dari tas", 3)
 end,
 })
 end)
@@ -11827,9 +12144,13 @@ local shown
 while alive() do
 task.wait(1)
 local V = UI.Vis
-local names = {}
+local names, bag = {}, {}
 for _, id in ipairs(V.Wear) do names[#names + 1] = itemName(id) end
-local txt = tostring(V.Status) .. (#names > 0 and ("\nDipakai: " .. table.concat(names, ", ")) or "")
+for id, n in pairs(V.Bag) do bag[#bag + 1] = ("%s x%d"):format(itemName(id), n) end
+local txt = tostring(V.Status)
+.. "\nFormat game: " .. (V.Tpl and "sudah dipelajari" or "BELUM (pakai / lepas 1 baju asli sekali)")
+.. (#names > 0 and ("\nDipakai: " .. table.concat(names, ", ")) or "")
+.. (#bag > 0 and ("\nDi tas: " .. table.concat(bag, ", ")) or "")
 if txt ~= shown and UI.VisStatus then
 shown = txt
 pcall(function() UI.VisStatus:SetDesc(txt) end)
@@ -12027,7 +12348,7 @@ do
 local function roleList()
 local _Gi, _Gj = {"none"}, {none = true}
 if RolesOk and type(RolesModule) == "table" and type(RolesModule.titlesOf) == "function" then
-local _Gk, _Gl = pcall(RolesModule.titlesOf, LocalPlayer.UserId)
+local _Gk, _Gl = pcall(NameFx.TitleOrig.titlesOf or RolesModule.titlesOf, LocalPlayer.UserId)
 if _Gk and type(_Gl) == "table" then
 for _Gm, _Gn in ipairs(_Gl) do
 if type(_Gn) == "string" and not _Gj[_Gn] then
@@ -21259,6 +21580,500 @@ Lic.Fails = 0
 end
 end
 end)
+do (function()
+local Proxy = {
+On = true,
+Prefix = "/",
+Echo = true,
+Tax = 0,
+Pos = {},
+GemsOn = false,
+Gems0 = nil,
+GemsGot = 0,
+Hooked = false,
+HookErr = nil,
+Last = "-",
+Busy = false,
+Found = nil,
+Ran = 0,
+}
+Session.Proxy = Proxy
+local LOCK = { w = 242, d = 1796, b = 7188 }
+local LOCK_NAME = { [242] = "World Lock", [1796] = "Diamond Lock", [7188] = "Blue Gem Lock" }
+local function echo(msg)
+if not Proxy.Echo then return end
+pcall(function()
+local ch = worldChannel()
+if ch then ch:DisplaySystemMessage("<font color=\"#7CC4FF\">[SkyP]</font> " .. msg) end
+end)
+end
+local function say(msg, dur)
+Proxy.Last = msg
+notify("SkyP Proxy", msg, dur or 4)
+echo(msg)
+if UI.ProxyStatus then
+task.defer(function()
+pcall(function()
+UI.ProxyStatus:SetDesc(("Perintah chat : %s\nHook chat     : %s\nPajak         : %s%%\nDijalankan    : %d\nTerakhir      : %s"):format(
+Proxy.On and "NYALA" or "MATI",
+Proxy.Hooked and "OK" or ("tidak tersedia" .. (Proxy.HookErr and (" (" .. Proxy.HookErr .. ")") or "")),
+tostring(Proxy.Tax), Proxy.Ran, Proxy.Last))
+end)
+end)
+end
+end
+local function busy()
+return State.Running or Pabrik.Running or Farmer.Running or Clear.Running or Splice.Running or Vend.Running
+or (Auto.Xfer and Auto.Xfer.On)
+end
+local function num(s)
+local n = tonumber(s)
+if not n then return nil end
+n = math.floor(n)
+return n > 0 and n or nil
+end
+local function splitWL(total)
+total = math.max(0, math.floor(total))
+return total // 10000, (total % 10000) // 100, total % 100
+end
+local function wlText(total)
+local b, d, w = splitWL(total)
+local parts = {}
+if b > 0 then parts[#parts + 1] = b .. " BGL" end
+if d > 0 then parts[#parts + 1] = d .. " DL" end
+if w > 0 or #parts == 0 then parts[#parts + 1] = w .. " WL" end
+return table.concat(parts, " + ")
+end
+local function live() return alive() end
+local function dropHere(id, n)
+if not Auto.dropItems then return 0, "fungsi drop belum siap" end
+local have = invCount(id)
+if have <= 0 then return 0, "tidak punya " .. itemName(id) end
+if have < n then return 0, ("%s kurang: punya %d, perlu %d"):format(itemName(id), have, n) end
+local got, why = Auto.dropItems(id, n, live)
+return got or 0, why
+end
+local function dropAt(slot, id, n)
+local p = Proxy.Pos[slot]
+if not p then return 0, "posisi " .. slot .. " belum diset (/setpos" .. slot .. ")" end
+if busy() then return 0, "matikan dulu fitur yang sedang jalan (farm/pabrik/dll)" end
+if invCount(id) < n then return 0, ("%s kurang: punya %d, perlu %d"):format(itemName(id), invCount(id), n) end
+if not Auto.walkTo then return 0, "fungsi jalan belum siap" end
+local ok = Auto.walkTo(p.x, p.y, 25)
+if not ok then return 0, "tidak bisa jalan ke posisi " .. slot end
+task.wait(0.2)
+return dropHere(id, n)
+end
+local function worldCall(...)
+local w = Refs.World
+local f = w and rawget(w, "call")
+if type(f) ~= "function" then return false end
+return pcall(f, ...)
+end
+local function convertUp()
+local inv = Refs.Inv
+if not inv then return 0 end
+local done = 0
+for _, step in ipairs({ { 242, 1796 }, { 1796, 7188 } }) do
+local from, to = step[1], step[2]
+local guard = 0
+while invCount(from) >= 100 and invCount(to) < 200 and guard < 50 do
+guard += 1
+pcall(function()
+inv:remove(from, 100)
+inv:add(to, 1)
+end)
+local ok = worldCall("ConvertLock", from, to)
+if not ok then break end
+done += 1
+task.wait(0.35)
+end
+end
+return done
+end
+local function dropsList()
+if not Drops.list then pcall(findDropRefs, false) end
+return Drops.list or {}
+end
+local function findItemIds(q)
+q = string.lower(q)
+local out = {}
+local exact = tonumber(q)
+if exact and ItemDB[exact] then return { exact } end
+for id, it in pairs(ItemDB) do
+if type(id) == "number" and type(it) == "table" and type(it.name) == "string"
+and string.find(string.lower(it.name), q, 1, true) then
+out[#out + 1] = id
+end
+end
+table.sort(out, function(a, b) return #itemName(a) < #itemName(b) end)
+return out
+end
+local function here()
+if Auto.here then
+local x, y = Auto.here()
+if x then return x, y end
+end
+return nil
+end
+local function gemsNow()
+local f = Stats.gemsNow
+if type(f) ~= "function" then return nil end
+local ok, g = pcall(f)
+return ok and g or nil
+end
+local CMDS = {}
+local HELP = {}
+local function add(names, cat, usage, desc, fn)
+for _, n in ipairs(names) do CMDS[n] = fn end
+HELP[#HELP + 1] = { cat = cat, usage = usage, desc = desc }
+end
+for key, id in pairs(LOCK) do
+local nm = LOCK_NAME[id]
+add({ key }, "Drop Lock", "/" .. key .. " (jumlah)", "Drop " .. nm, function(a)
+local n = num(a[1])
+if not n then return say("Pakai: /" .. key .. " jumlah") end
+local got, why = dropHere(id, n)
+say(got > 0 and ("Drop %d %s"):format(got, nm) or ("Gagal: " .. tostring(why)))
+end)
+add({ key .. "x2" }, "Drop Lock", "/" .. key .. "x2 (jumlah)", "Drop 2x jumlah " .. nm, function(a)
+local n = num(a[1])
+if not n then return say("Pakai: /" .. key .. "x2 jumlah") end
+local got, why = dropHere(id, n * 2)
+say(got > 0 and ("Drop %d %s (x2)"):format(got, nm) or ("Gagal: " .. tostring(why)))
+end)
+add({ key .. "x3" }, "Drop Lock", "/" .. key .. "x3 (jumlah)", "Drop 3x jumlah " .. nm, function(a)
+local n = num(a[1])
+if not n then return say("Pakai: /" .. key .. "x3 jumlah") end
+local got, why = dropHere(id, n * 3)
+say(got > 0 and ("Drop %d %s (x3)"):format(got, nm) or ("Gagal: " .. tostring(why)))
+end)
+add({ key .. "all" }, "Drop Lock", "/" .. key .. "all", "Drop semua " .. nm, function()
+local n = invCount(id)
+if n <= 0 then return say("Tidak punya " .. nm) end
+local got, why = dropHere(id, n)
+say(got > 0 and ("Drop semua: %d %s"):format(got, nm) or ("Gagal: " .. tostring(why)))
+end)
+for slot = 1, 4 do
+CMDS[key .. slot] = function(a)
+local n = num(a[1])
+if not n then return say(("Pakai: /%s%d jumlah"):format(key, slot)) end
+local got, why = dropAt(slot, id, n)
+say(got > 0 and ("Drop %d %s di posisi %d"):format(got, nm, slot) or ("Gagal: " .. tostring(why)))
+end
+end
+end
+HELP[#HELP + 1] = { cat = "Drop Lock", usage = "/w1../w4, /d1../d4, /b1../b4 (jumlah)", desc = "Jalan ke posisi 1-4 lalu drop" }
+for slot = 1, 4 do
+CMDS["setpos" .. slot] = function()
+local x, y = here()
+if not x then return say("Posisi karakter tidak terbaca") end
+Proxy.Pos[slot] = { x = x, y = y }
+say(("Posisi %d disimpan: X %d, Y %d"):format(slot, x, y))
+end
+end
+HELP[#HELP + 1] = { cat = "Posisi", usage = "/setpos1 .. /setpos4", desc = "Simpan posisi berdiri sekarang" }
+add({ "pos" }, "Posisi", "/pos", "Lihat posisi sekarang & posisi tersimpan", function()
+local x, y = here()
+local parts = { x and ("Sekarang X %d, Y %d"):format(x, y) or "Sekarang: -" }
+for slot = 1, 4 do
+local p = Proxy.Pos[slot]
+if p then parts[#parts + 1] = ("P%d %d,%d"):format(slot, p.x, p.y) end
+end
+say(table.concat(parts, " | "), 6)
+end)
+add({ "stax" }, "Hoster", "/stax (persen)", "Set pajak hoster (dipakai /tax & /pay)", function(a)
+local n = tonumber(a[1])
+if not n or n < 0 or n > 100 then return say("Pakai: /stax 0-100") end
+Proxy.Tax = n
+say("Pajak diset ke " .. n .. "%")
+end)
+add({ "tax" }, "Hoster", "/tax (bet WL)", "Hitung pajak 2 pemain & hadiah pemenang", function(a)
+local bet = num(a[1])
+if not bet then return say("Pakai: /tax bet  (dalam WL, mis. /tax 150)") end
+local total = bet * 2
+local tax = math.floor(total * Proxy.Tax / 100)
+say(("Bet %s x2 = %s | Pajak %s%% = %s | Pemenang dapat %s"):format(
+wlText(bet), wlText(total), tostring(Proxy.Tax), wlText(tax), wlText(total - tax)), 8)
+end)
+add({ "pay" }, "Hoster", "/pay (bet WL)", "Drop hadiah pemenang (bet x2 - pajak), lock dipecah otomatis", function(a)
+local bet = num(a[1])
+if not bet then return say("Pakai: /pay bet  (dalam WL)") end
+local total = bet * 2
+local win = total - math.floor(total * Proxy.Tax / 100)
+local b, d, w = splitWL(win)
+local lack = {}
+if invCount(7188) < b then lack[#lack + 1] = ("BGL %d/%d"):format(invCount(7188), b) end
+if invCount(1796) < d then lack[#lack + 1] = ("DL %d/%d"):format(invCount(1796), d) end
+if invCount(242) < w then lack[#lack + 1] = ("WL %d/%d"):format(invCount(242), w) end
+if #lack > 0 then return say("Lock kurang: " .. table.concat(lack, ", ") .. " (pecah lock dulu)", 6) end
+local done = {}
+for _, it in ipairs({ { 7188, b }, { 1796, d }, { 242, w } }) do
+if it[2] > 0 then
+local got, why = dropHere(it[1], it[2])
+if got <= 0 then return say("Gagal drop " .. itemName(it[1]) .. ": " .. tostring(why)) end
+done[#done + 1] = got .. " " .. itemName(it[1])
+end
+end
+say("Dibayar " .. wlText(win) .. " (" .. table.concat(done, ", ") .. ")", 6)
+end)
+add({ "cv", "convert" }, "Hoster", "/cv", "Convert 100 WL -> DL dan 100 DL -> BGL sebanyak mungkin", function()
+local n = convertUp()
+say(n > 0 and ("Convert %d kali | WL %d, DL %d, BGL %d"):format(n, invCount(242), invCount(1796), invCount(7188))
+or "Tidak ada yang bisa di-convert")
+end)
+add({ "locks", "kunci" }, "Hoster", "/locks", "Lihat jumlah lock di tas", function()
+local total = invCount(242) + invCount(1796) * 100 + invCount(7188) * 10000
+say(("WL %d | DL %d | BGL %d | total %s"):format(invCount(242), invCount(1796), invCount(7188), wlText(total)), 6)
+end)
+add({ "gems" }, "Gems", "/gems", "Mulai / berhenti menghitung gems yang terkumpul", function()
+if not Proxy.GemsOn then
+local g = gemsNow()
+if not g then return say("Angka gems belum terbaca") end
+Proxy.GemsOn, Proxy.Gems0 = true, g
+say("Hitung gems mulai (gems sekarang " .. g .. ")")
+else
+local g = gemsNow()
+Proxy.GemsGot = (g and Proxy.Gems0) and (g - Proxy.Gems0) or Proxy.GemsGot
+Proxy.GemsOn = false
+say("Hitung gems berhenti: terkumpul " .. Proxy.GemsGot .. " gems")
+end
+end)
+add({ "sg" }, "Gems", "/sg", "Kirim jumlah gems terkumpul ke chat world", function()
+local got = Proxy.GemsGot
+if Proxy.GemsOn then
+local g = gemsNow()
+if g and Proxy.Gems0 then got = g - Proxy.Gems0 end
+end
+local ch = worldChannel()
+if not ch then return say("Chat world belum ada (masuk world dulu)") end
+pcall(ch.SendAsync, ch, "Collected : " .. got .. " gems")
+say("Dikirim ke chat: " .. got .. " gems")
+end)
+add({ "id" }, "Cari", "/id (nama item)", "Cari ID item dari nama", function(a)
+local q = table.concat(a, " ")
+if q == "" then return say("Pakai: /id nama item") end
+local ids = findItemIds(q)
+if #ids == 0 then return say("Item tidak ketemu: " .. q) end
+local parts = {}
+for i = 1, math.min(6, #ids) do parts[#parts + 1] = itemName(ids[i]) .. " = " .. ids[i] end
+say(table.concat(parts, " | ") .. (#ids > 6 and (" | +" .. (#ids - 6) .. " lagi") or ""), 8)
+end)
+add({ "check", "cek" }, "Cari", "/check (ID / nama)", "Cari item yang tergeletak (drop) di world", function(a)
+local q = table.concat(a, " ")
+if q == "" then return say("Pakai: /check id  atau  /check nama") end
+local ids = findItemIds(q)
+if #ids == 0 then return say("Item tidak ketemu: " .. q) end
+local want = {}
+for _, id in ipairs(ids) do want[id] = true end
+local found, total = {}, 0
+for _, d in ipairs(dropsList()) do
+if type(d) == "table" and want[d.id] and (d.n or 0) > 0 and type(d.x) == "number" and type(d.y) == "number" then
+found[#found + 1] = d
+total += d.n
+end
+end
+local x, y = here()
+if x then
+table.sort(found, function(p, q2)
+return math.abs(p.x - x) + math.abs(p.y - y) < math.abs(q2.x - x) + math.abs(q2.y - y)
+end)
+end
+Proxy.Found = found
+if #found == 0 then return say("Tidak ada " .. itemName(ids[1]) .. " yang tergeletak di world ini") end
+local parts = {}
+for i = 1, math.min(4, #found) do
+local d = found[i]
+parts[#parts + 1] = ("%dx di %d,%d"):format(d.n, math.floor(d.x), math.floor(d.y))
+end
+say(("%s: %d tumpuk, total %d | %s | /goto = ke yang terdekat"):format(
+itemName(found[1].id), #found, total, table.concat(parts, " ; ")), 8)
+end)
+add({ "goto" }, "Cari", "/goto", "Jalan ke drop terdekat hasil /check", function()
+local d = Proxy.Found and Proxy.Found[1]
+if not d then return say("Jalankan /check dulu") end
+if busy() then return say("Matikan dulu fitur yang sedang jalan") end
+local ok = Auto.walkTo and Auto.walkTo(math.floor(d.x), math.floor(d.y), 25)
+say(ok and "Sampai di drop" or "Tidak bisa jalan ke drop itu")
+end)
+add({ "warp" }, "SkyP", "/warp (WORLD[:pintu])", "Pindah world (bisa langsung ke pintu)", function(a)
+local raw = string.upper(table.concat(a, ""))
+local name, door = string.match(raw, "^([^:]*):?(.*)$")
+name = (name or ""):gsub("[^A-Z0-9]", "")
+if name == "" then return say("Pakai: /warp NAMAWORLD  atau  /warp NAMAWORLD:ID") end
+if busy() then return say("Matikan dulu fitur yang sedang jalan") end
+if not Auto.goWorld then return say("Fungsi pindah world belum siap") end
+say("Pindah ke " .. name .. (door ~= "" and (":" .. door) or "") .. "...")
+local ok, err = Auto.goWorld(name, door ~= "" and door or nil)
+say(ok and ("Masuk " .. name) or ("Gagal masuk " .. name .. ": " .. tostring(err)))
+end)
+add({ "farm" }, "SkyP", "/farm", "Nyalakan Auto Farm (pakai setelan menu Farm)", function()
+if State.Running then return say("Auto Farm sudah jalan") end
+startFarm()
+say(State.Running and "Auto Farm jalan" or "Auto Farm tidak bisa mulai (cek setelan Farm)")
+end)
+add({ "stop" }, "SkyP", "/stop", "Matikan Auto Farm & jalan otomatis", function()
+if Auto.stopWalk then Auto.stopWalk() end
+if State.Running then stopFarm("Dihentikan lewat /stop") end
+say("Dihentikan")
+end)
+add({ "collect" }, "SkyP", "/collect", "Nyala / matikan collect di sekitar karakter", function()
+State.CollectAround = not State.CollectAround
+say("Collect di sekitar karakter: " .. (State.CollectAround and "NYALA" or "MATI"))
+end)
+add({ "help", "cmd", "proxy" }, "SkyP", "/help", "Daftar perintah (juga ada di menu Proxy)", function()
+say("Daftar lengkap ada di menu SkyP > Proxy > Perintah. Contoh: /w 10, /pay 150, /check dirt", 6)
+end)
+local function parse(msg)
+if type(msg) ~= "string" then return nil end
+local pre = Proxy.Prefix ~= "" and Proxy.Prefix or "/"
+if string.sub(msg, 1, #pre) ~= pre then return nil end
+local body = string.sub(msg, #pre + 1)
+local name, rest = string.match(body, "^(%S+)%s*(.*)$")
+if not name then return nil end
+name = string.lower(name)
+local fn = CMDS[name]
+if not fn then return nil end
+local args = {}
+for w in string.gmatch(rest, "%S+") do args[#args + 1] = w end
+return fn, args, name
+end
+Proxy.parse = parse
+function Proxy.run(msg)
+local fn, args, name = parse(msg)
+if not fn then
+say("Perintah tidak dikenal: " .. tostring(msg) .. "  (/help)")
+return false
+end
+if Proxy.Busy then
+say("Tunggu, perintah sebelumnya belum selesai")
+return true
+end
+Proxy.Busy = true
+Proxy.Ran += 1
+task.spawn(function()
+local ok, err = pcall(fn, args)
+Proxy.Busy = false
+if not ok then say("Error /" .. name .. ": " .. tostring(err), 6) end
+end)
+return true
+end
+do
+local okH, errH = pcall(function()
+if type(hookmetamethod) ~= "function" or type(getnamecallmethod) ~= "function" then
+error("executor tidak punya hookmetamethod")
+end
+local wrapC = type(newcclosure) == "function" and newcclosure or function(f) return f end
+local isOurs = type(checkcaller) == "function" and checkcaller or function() return false end
+local old
+old = hookmetamethod(game, "__namecall", wrapC(function(self, ...)
+if not isOurs() and Proxy.On and alive() and getnamecallmethod() == "SendAsync"
+and typeof(self) == "Instance" and self.ClassName == "TextChannel" then
+local msg = ...
+if parse(msg) then
+task.spawn(Proxy.run, msg)
+return nil
+end
+end
+return old(self, ...)
+end))
+end)
+Proxy.Hooked = okH
+if not okH then Proxy.HookErr = tostring(errH):gsub("^.-:%d+: ", "") end
+end
+task.spawn(function()
+while alive() do
+if Proxy.GemsOn and Proxy.Gems0 then
+local g = gemsNow()
+if g then Proxy.GemsGot = g - Proxy.Gems0 end
+end
+task.wait(1)
+end
+end)
+local ProxyTab = makeTab("Proxy", "terminal", "proxy")
+safe(function()
+UI.ProxyStatus = ProxyTab:Paragraph({ Title = "Status Proxy", Desc = "-" })
+end)
+safe(function()
+ProxyTab:Paragraph({
+Title = "Cara pakai",
+Desc = "Ketik perintah di chat game, contoh  /w 10  atau  /pay 150. Perintah tidak terkirim ke server "
+.. "(pemain lain tidak melihat). Kalau hook chat tidak tersedia, ketik di kotak perintah di bawah.",
+})
+end)
+local ProxyBox = box(ProxyTab, "Kontrol", true)
+safe(function()
+ProxyBox:Toggle({
+Title = "Perintah chat",
+Desc = "Cegat pesan berawalan prefix yang cocok dengan perintah",
+Value = Proxy.On,
+Callback = function(on) Proxy.On = on say("Perintah chat " .. (on and "NYALA" or "MATI")) end,
+})
+end)
+safe(function()
+ProxyBox:Toggle({
+Title = "Tampilkan hasil di chat",
+Desc = "Pesan sistem lokal di chat (hanya kamu yang lihat)",
+Value = Proxy.Echo,
+Callback = function(on) Proxy.Echo = on end,
+})
+end)
+safe(function()
+ProxyBox:Input({
+Title = "Prefix",
+Desc = "Awalan perintah (default /). Ganti ke . kalau bentrok dengan perintah chat Roblox",
+Value = Proxy.Prefix,
+Placeholder = "/",
+Callback = function(text)
+text = tostring(text or ""):gsub("%s", "")
+Proxy.Prefix = text ~= "" and string.sub(text, 1, 2) or "/"
+say("Prefix: " .. Proxy.Prefix)
+end,
+})
+end)
+safe(function()
+ProxyBox:Input({
+Title = "Kotak perintah",
+Desc = "Ketik perintah lalu Enter (mis. /tax 150)",
+Value = "",
+Placeholder = "/w 10",
+Callback = function(text)
+text = tostring(text or "")
+if text == "" then return end
+if not parse(text) and string.sub(text, 1, 1) ~= Proxy.Prefix then text = Proxy.Prefix .. text end
+Proxy.run(text)
+end,
+})
+end)
+local CmdTab = makeTab("Perintah", "list", "proxy")
+safe(function()
+local order, byCat = {}, {}
+for _, h in ipairs(HELP) do
+if not byCat[h.cat] then byCat[h.cat] = {} order[#order + 1] = h.cat end
+table.insert(byCat[h.cat], h)
+end
+for _, cat in ipairs(order) do
+local lines = {}
+for _, h in ipairs(byCat[cat]) do lines[#lines + 1] = h.usage .. "  -  " .. h.desc end
+CmdTab:Paragraph({ Title = cat, Desc = table.concat(lines, "\n") })
+end
+end)
+safe(function()
+CmdTab:Button({
+Title = "Salin daftar perintah",
+Desc = "Untuk dibagikan ke pembeli / Discord",
+Callback = function()
+local lines = { "SkyP Proxy - daftar perintah" }
+for _, h in ipairs(HELP) do lines[#lines + 1] = h.usage .. "  -  " .. h.desc end
+local clip = setclipboard or toclipboard
+if type(clip) == "function" and pcall(clip, table.concat(lines, "\n")) then
+notify("SkyP Proxy", "Daftar perintah disalin", 3)
+end
+end,
+})
+end)
+say(Proxy.Hooked and "Siap. Ketik /help di chat" or "Hook chat tidak tersedia, pakai kotak perintah di menu Proxy")
+end)() end
 task.spawn(function()
 Session.mark("menu")
 reconnect("SkyP v" .. Session.Lic.Ver)
@@ -21307,6 +22122,7 @@ task.wait(1)
 end
 end)
 Session.Cleanup = function()
+pcall(NameFx.restoreTitle)
 State.Running = false
 Clear.Running = false
 Farmer.Running = false
