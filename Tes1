@@ -1,0 +1,286 @@
+--[[
+    SkyP Debug: Keluar World (v1.0)
+    Mencari tahu KENAPA script hilang saat keluar world.
+
+    Caranya: semua kejadian penting ditulis ke FILE (bukan cuma layar), jadi walau script
+    mati saat keluar world, catatannya tetap ada. Jalankan lagi debug ini -> tekan "Salin laporan".
+
+    Yang direkam:
+      - Heartbeat tiap 1 dtk (waktu, PlaceId, JobId, ada GameGui?, ada Character?). Kalau heartbeat
+        BERHENTI pas keluar world = VM Lua mati (biasanya karena teleport/pindah server).
+      - OnTeleport (LocalPlayer berpindah server) + state-nya.
+      - PlaceId / JobId berubah (pindah server Roblox).
+      - GameGui muncul/hilang (tanda masuk/keluar world di dalam server yang sama).
+      - Layar error Roblox (GuiService).
+      - GUI debug ini ditaruh di CoreGui, jadi tetap ada walau PlayerGui di-reset. Kalau menu SkyP
+        hilang tapi debug ini masih ada = masalahnya GUI SkyP (parent/ResetOnSpawn), bukan VM mati.
+]]
+
+local VERSION = "1.0"
+local G = (getgenv and getgenv()) or _G
+if type(G.SkyPDebug) == "table" and type(G.SkyPDebug.stop) == "function" then pcall(G.SkyPDebug.stop) end
+
+local Players = game:GetService("Players")
+local LP = Players.LocalPlayer
+local TPS = game:GetService("TeleportService")
+local GuiService = game:GetService("GuiService")
+local RunService = game:GetService("RunService")
+local UIS = game:GetService("UserInputService")
+
+local D = { alive = true, conns = {}, lines = {} }
+G.SkyPDebug = D
+
+local LOG = "Fian/skyp_leaveworld.log"
+local HB = "Fian/skyp_leaveworld_hb.txt"
+local canFile = type(writefile) == "function" and type(readfile) == "function" and type(isfile) == "function"
+
+local function nowStr() return os.date("%H:%M:%S") end
+
+-- ---------- UI (CoreGui, supaya tidak ikut hilang kalau PlayerGui reset) ----------
+local function new(cls, props, parent)
+    local o = Instance.new(cls)
+    for k, v in pairs(props or {}) do o[k] = v end
+    if parent then o.Parent = parent end
+    return o
+end
+local function corner(o, r) new("UICorner", { CornerRadius = UDim.new(0, r or 8) }, o) return o end
+
+local guiParent = (gethui and gethui()) or game:GetService("CoreGui")
+local gui = new("ScreenGui", { Name = "SkyPDebug", ResetOnSpawn = false, IgnoreGuiInset = true }, guiParent)
+if syn and syn.protect_gui then pcall(syn.protect_gui, gui) end
+
+local main = new("Frame", { Size = UDim2.fromOffset(360, 340), Position = UDim2.new(0.5, -180, 0.5, -170),
+    BackgroundColor3 = Color3.fromRGB(16, 18, 26), BorderSizePixel = 0, Active = true }, gui)
+corner(main, 10)
+new("UIStroke", { Color = Color3.fromRGB(62, 150, 255), Thickness = 1.5, Transparency = 0.2 }, main)
+
+local header = new("Frame", { Size = UDim2.new(1, 0, 0, 36), BackgroundColor3 = Color3.fromRGB(24, 27, 38),
+    BorderSizePixel = 0 }, main)
+corner(header, 10)
+new("TextLabel", { Size = UDim2.new(1, -80, 1, 0), Position = UDim2.fromOffset(12, 0), BackgroundTransparency = 1,
+    Text = "SkyP Debug · Keluar World", TextColor3 = Color3.fromRGB(232, 236, 245), Font = Enum.Font.GothamBold,
+    TextSize = 14, TextXAlignment = Enum.TextXAlignment.Left }, header)
+local btnClose = new("TextButton", { Size = UDim2.fromOffset(26, 26), Position = UDim2.new(1, -32, 0, 5),
+    BackgroundColor3 = Color3.fromRGB(32, 36, 50), Text = "×", TextColor3 = Color3.fromRGB(240, 90, 100),
+    Font = Enum.Font.GothamBold, TextSize = 18 }, header)
+corner(btnClose, 6)
+
+local box = new("ScrollingFrame", { Size = UDim2.new(1, -16, 1, -92), Position = UDim2.fromOffset(8, 42),
+    BackgroundColor3 = Color3.fromRGB(10, 11, 16), BorderSizePixel = 0, ScrollBarThickness = 4,
+    CanvasSize = UDim2.new(), AutomaticCanvasSize = Enum.AutomaticSize.Y,
+    ScrollBarImageColor3 = Color3.fromRGB(62, 150, 255) }, main)
+corner(box, 6)
+local logLabel = new("TextLabel", { Size = UDim2.new(1, -12, 0, 0), Position = UDim2.fromOffset(6, 4),
+    AutomaticSize = Enum.AutomaticSize.Y, BackgroundTransparency = 1, Text = "", TextColor3 = Color3.fromRGB(210, 215, 225),
+    Font = Enum.Font.Code, TextSize = 12, TextXAlignment = Enum.TextXAlignment.Left,
+    TextYAlignment = Enum.TextYAlignment.Top, TextWrapped = true }, box)
+
+local function mkBtn(text, x, w, col)
+    local b = new("TextButton", { Size = UDim2.fromOffset(w, 32), Position = UDim2.new(0, x, 1, -40),
+        BackgroundColor3 = col or Color3.fromRGB(32, 36, 50), Text = text, TextColor3 = Color3.fromRGB(232, 236, 245),
+        Font = Enum.Font.GothamBold, TextSize = 12 }, main)
+    corner(b, 7)
+    return b
+end
+local bCopy = mkBtn("Salin laporan", 8, 150, Color3.fromRGB(0, 120, 215))
+local bClear = mkBtn("Hapus catatan", 166, 110)
+local bHide = mkBtn("–", 284, 68)
+
+local function paint()
+    local out = {}
+    for i = math.max(1, #D.lines - 60), #D.lines do out[#out + 1] = D.lines[i] end
+    logLabel.Text = table.concat(out, "\n")
+end
+
+-- ---------- catatan ke file ----------
+local function fileAppend(line)
+    if not canFile then return end
+    pcall(function()
+        if type(makefolder) == "function" and type(isfolder) == "function" and not isfolder("Fian") then makefolder("Fian") end
+        local prev = isfile(LOG) and readfile(LOG) or ""
+        -- simpan maksimal ~400 baris terakhir supaya file tidak membengkak
+        local _, n = string.gsub(prev, "\n", "")
+        if n > 400 then
+            local cut = string.find(prev, "\n", #prev - 20000, true)
+            if cut then prev = string.sub(prev, cut + 1) end
+        end
+        writefile(LOG, prev .. line .. "\n")
+    end)
+end
+
+local function log(line)
+    line = ("[%s] %s"):format(nowStr(), tostring(line))
+    table.insert(D.lines, line)
+    fileAppend(line)
+    paint()
+end
+
+-- ---------- bantuan deteksi ----------
+local function playerGui() return LP:FindFirstChildOfClass("PlayerGui") end
+local function hasGameGui()
+    local pg = playerGui()
+    return pg ~= nil and pg:FindFirstChild("GameGui") ~= nil
+end
+local function hasChar() return LP.Character ~= nil and LP.Character.Parent ~= nil end
+local function placeInfo()
+    local job = ""
+    pcall(function() job = tostring(game.JobId):sub(1, 8) end)
+    return ("place=%s job=%s"):format(tostring(game.PlaceId), job)
+end
+
+-- ---------- tampilkan sesi sebelumnya (kalau tadi mati) ----------
+local function showPrevious()
+    if not canFile then
+        log("Executor tidak punya writefile: catatan tidak bisa disimpan ke file")
+        return
+    end
+    local lastHb
+    pcall(function() if isfile(HB) then lastHb = readfile(HB) end end)
+    if lastHb then
+        log("== SESI SEBELUMNYA ==")
+        log("Heartbeat terakhir: " .. tostring(lastHb))
+        log("(kalau waktunya pas kamu keluar world = VM Lua mati saat itu)")
+    end
+    local prev
+    pcall(function() if isfile(LOG) then prev = readfile(LOG) end end)
+    if prev and #prev > 0 then
+        local tail = {}
+        for line in string.gmatch(prev, "[^\n]+") do tail[#tail + 1] = line end
+        local from = math.max(1, #tail - 25)
+        table.insert(D.lines, "---- catatan file (25 baris terakhir) ----")
+        for i = from, #tail do table.insert(D.lines, tail[i]) end
+        table.insert(D.lines, "---- (catatan baru di bawah) ----")
+        paint()
+    end
+end
+
+-- ---------- rekam kejadian ----------
+local function startWatch()
+    log("=== SkyP Debug START (" .. placeInfo() .. ") ===")
+    log(("Awal: GameGui=%s Character=%s"):format(tostring(hasGameGui()), tostring(hasChar())))
+    log("GUI debug ini di: " .. gui.Parent.ClassName .. " (tetap ada walau PlayerGui reset)")
+
+    -- OnTeleport: LocalPlayer dipindah server Roblox (ini = VM Lua akan mati)
+    pcall(function()
+        table.insert(D.conns, LP.OnTeleport:Connect(function(state)
+            log("!!! OnTeleport state=" .. tostring(state) .. " (pindah server = script MATI, " .. placeInfo() .. ")")
+        end))
+    end)
+    pcall(function()
+        table.insert(D.conns, TPS.TeleportInitFailed:Connect(function(plr, res, msg)
+            if plr == LP then log("TeleportInitFailed: " .. tostring(res) .. " " .. tostring(msg)) end
+        end))
+    end)
+    -- layar error Roblox
+    pcall(function()
+        table.insert(D.conns, GuiService.ErrorMessageChanged:Connect(function(msg)
+            if type(msg) == "string" and msg ~= "" then log("ERROR Roblox: " .. msg) end
+        end))
+    end)
+    -- Character hilang/muncul
+    pcall(function()
+        table.insert(D.conns, LP.CharacterRemoving:Connect(function() log("Character HILANG (keluar world / respawn?)") end))
+        table.insert(D.conns, LP.CharacterAdded:Connect(function() log("Character muncul lagi") end))
+    end)
+
+    -- loop pengamat 1 dtk: heartbeat + perubahan GameGui / place / job
+    task.spawn(function()
+        local prevGG = hasGameGui()
+        local prevPlace, prevJob = game.PlaceId, nil
+        pcall(function() prevJob = game.JobId end)
+        local n = 0
+        while D.alive do
+            n += 1
+            local gg = hasGameGui()
+            if gg ~= prevGG then
+                log(gg and ">> MASUK world (GameGui muncul)" or ">> KELUAR world (GameGui hilang) " .. placeInfo())
+                prevGG = gg
+            end
+            if game.PlaceId ~= prevPlace then
+                log("PlaceId berubah: " .. tostring(prevPlace) .. " -> " .. tostring(game.PlaceId))
+                prevPlace = game.PlaceId
+            end
+            local job
+            pcall(function() job = game.JobId end)
+            if job ~= prevJob then
+                log("JobId (server) berubah -> pindah server Roblox")
+                prevJob = job
+            end
+            -- heartbeat ke file (ditimpa tiap detik): bukti script masih hidup sampai waktu ini
+            if canFile then
+                pcall(function()
+                    writefile(HB, ("%s | %s | GameGui=%s Char=%s | detik ke-%d"):format(
+                        nowStr(), placeInfo(), tostring(gg), tostring(hasChar()), n))
+                end)
+            end
+            -- GUI debug ikut hilang? (tidak seharusnya)
+            if gui.Parent == nil then
+                fileAppend(("[%s] !!! GUI debug ikut hilang (parent nil)"):format(nowStr()))
+            end
+            task.wait(1)
+        end
+    end)
+end
+
+-- ---------- tombol ----------
+bCopy.MouseButton1Click:Connect(function()
+    local txt = "-- SkyP Debug Keluar World v" .. VERSION .. "\n"
+    pcall(function() if canFile and isfile(HB) then txt = txt .. "Heartbeat terakhir: " .. readfile(HB) .. "\n" end end)
+    pcall(function() if canFile and isfile(LOG) then txt = txt .. readfile(LOG) end end)
+    if txt == "" then txt = table.concat(D.lines, "\n") end
+    local clip = setclipboard or toclipboard
+    if type(clip) == "function" and pcall(clip, txt) then
+        log("Laporan disalin, tempel ke developer")
+    else
+        print(txt)
+        log("Executor tidak bisa menyalin: laporan dicetak di console (F9)")
+    end
+end)
+bClear.MouseButton1Click:Connect(function()
+    table.clear(D.lines)
+    pcall(function() if canFile and type(delfile) == "function" then
+        if isfile(LOG) then delfile(LOG) end
+        if isfile(HB) then delfile(HB) end
+    end end)
+    log("Catatan dihapus")
+end)
+local hidden = false
+bHide.MouseButton1Click:Connect(function()
+    hidden = not hidden
+    box.Visible = not hidden
+    bCopy.Visible = not hidden
+    bClear.Visible = not hidden
+    main.Size = hidden and UDim2.fromOffset(360, 36) or UDim2.fromOffset(360, 340)
+    bHide.Text = hidden and "+" or "–"
+end)
+
+-- geser jendela (mouse & sentuh)
+do
+    local dragging, startPos, startInput
+    header.InputBegan:Connect(function(io)
+        if io.UserInputType == Enum.UserInputType.MouseButton1 or io.UserInputType == Enum.UserInputType.Touch then
+            dragging, startPos, startInput = true, main.Position, io.Position
+            io.Changed:Connect(function()
+                if io.UserInputState == Enum.UserInputState.End then dragging = false end
+            end)
+        end
+    end)
+    table.insert(D.conns, UIS.InputChanged:Connect(function(io)
+        if dragging and (io.UserInputType == Enum.UserInputType.MouseMovement or io.UserInputType == Enum.UserInputType.Touch) then
+            local d = io.Position - startInput
+            main.Position = UDim2.new(startPos.X.Scale, startPos.X.Offset + d.X, startPos.Y.Scale, startPos.Y.Offset + d.Y)
+        end
+    end))
+end
+
+function D.stop()
+    if not D.alive then return end
+    D.alive = false
+    for _, c in ipairs(D.conns) do pcall(function() c:Disconnect() end) end
+    pcall(function() gui:Destroy() end)
+    if G.SkyPDebug == D then G.SkyPDebug = nil end
+end
+btnClose.MouseButton1Click:Connect(D.stop)
+
+showPrevious()
+startWatch()
